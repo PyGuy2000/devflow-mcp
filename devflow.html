@@ -1,0 +1,1659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DevFlow — Solo Workflow Tracker</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;700;800&display=swap');
+
+  :root {
+    --bg: #0d0f14;
+    --surface: #141720;
+    --surface2: #1c2030;
+    --surface3: #242840;
+    --border: #2a2f45;
+    --border-bright: #3a4060;
+    --text: #e8eaf2;
+    --text-dim: #7a80a0;
+    --text-muted: #454d6a;
+    --accent: #4f7cff;
+    --accent-glow: rgba(79,124,255,0.18);
+    --green: #2dd4a0;
+    --green-glow: rgba(45,212,160,0.15);
+    --amber: #f5a623;
+    --amber-glow: rgba(245,166,35,0.15);
+    --red: #ff5f7a;
+    --red-glow: rgba(255,95,122,0.15);
+    --purple: #a78bfa;
+    --purple-glow: rgba(167,139,250,0.15);
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Syne', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Noise texture overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    opacity: 0.025;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size: 200px;
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ── HEADER ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 28px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo {
+    font-family: var(--sans);
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: var(--text);
+  }
+  .logo span { color: var(--accent); }
+
+  .header-meta {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .stat-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-dim);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+  }
+  .stat-pill .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+  }
+
+  .btn-primary {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-transform: uppercase;
+  }
+  .btn-primary:hover { background: #6b93ff; box-shadow: 0 0 16px var(--accent-glow); }
+
+  .btn-ghost {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    padding: 7px 14px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn-ghost:hover { border-color: var(--border-bright); color: var(--text); }
+
+  /* ── LAYOUT ── */
+  .app {
+    display: grid;
+    grid-template-columns: 260px 1fr 320px;
+    height: calc(100vh - 57px);
+  }
+
+  /* ── LEFT SIDEBAR ── */
+  .sidebar {
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    overflow-y: auto;
+    padding: 16px 0;
+  }
+
+  .sidebar-section {
+    margin-bottom: 8px;
+  }
+
+  .sidebar-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 4px 16px 8px;
+  }
+
+  .project-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    transition: all 0.12s;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  .project-item:hover { background: var(--surface2); color: var(--text); }
+  .project-item.active { 
+    background: var(--surface2); 
+    color: var(--text);
+    border-left-color: var(--accent);
+  }
+
+  .project-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .project-count {
+    margin-left: auto;
+    font-size: 10px;
+    background: var(--surface3);
+    color: var(--text-muted);
+    padding: 1px 6px;
+    border-radius: 10px;
+  }
+
+  .project-actions {
+    display: none;
+    gap: 2px;
+    margin-left: 4px;
+  }
+  .project-item:hover .project-actions { display: flex; }
+  .project-item:hover .project-count { display: none; }
+
+  .proj-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: var(--text-muted);
+    line-height: 1;
+    transition: all 0.1s;
+  }
+  .proj-btn:hover { background: var(--surface3); color: var(--text); }
+  .proj-btn.del:hover { color: var(--red); }
+
+  .sidebar-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 12px 16px;
+  }
+
+  /* ── MAIN BOARD ── */
+  .board {
+    overflow-y: auto;
+    background: var(--bg);
+    padding: 24px;
+  }
+
+  .board-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+
+  .board-title {
+    font-family: var(--sans);
+    font-size: 22px;
+    font-weight: 700;
+  }
+
+  .board-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .filter-btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 5px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .filter-btn:hover, .filter-btn.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-glow);
+  }
+
+  /* ── COLUMNS ── */
+  .columns {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+
+  .column {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .column-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .column-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .column-badge {
+    width: 18px; height: 18px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--surface3);
+    color: var(--text-muted);
+  }
+
+  .col-indicator {
+    width: 8px; height: 8px;
+    border-radius: 2px;
+  }
+
+  .column-body {
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 80px;
+  }
+
+  /* ── TICKETS ── */
+  .ticket {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+  }
+  .ticket:hover {
+    border-color: var(--border-bright);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+  .ticket.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), 0 4px 16px var(--accent-glow);
+  }
+
+  .ticket-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 7px;
+  }
+
+  .ticket-id {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .ticket-priority {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+  }
+
+  .ticket-title {
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+
+  .ticket-project-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    margin-bottom: 8px;
+    font-weight: 500;
+  }
+
+  .ticket-footer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+
+  .dep-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    background: var(--surface3);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+  }
+  .dep-badge.blocked {
+    background: var(--red-glow);
+    border-color: var(--red);
+    color: var(--red);
+  }
+  .dep-badge.blocking {
+    background: var(--amber-glow);
+    border-color: var(--amber);
+    color: var(--amber);
+  }
+  .dep-badge.ready {
+    background: var(--green-glow);
+    border-color: var(--green);
+    color: var(--green);
+  }
+
+  .ticket-age {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  /* ── RIGHT PANEL ── */
+  .detail-panel {
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .panel-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+    gap: 12px;
+    text-align: center;
+    padding: 32px;
+  }
+
+  .panel-empty .icon {
+    font-size: 36px;
+    opacity: 0.3;
+  }
+
+  .panel-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .panel-ticket-id {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 500;
+    font-family: var(--mono);
+  }
+
+  .panel-body {
+    padding: 20px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .panel-title {
+    font-family: var(--sans);
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+
+  .field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .field-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .field-value {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.5;
+    background: var(--surface2);
+    padding: 10px 12px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+  }
+
+  .why-box {
+    background: linear-gradient(135deg, rgba(79,124,255,0.08), rgba(167,139,250,0.08));
+    border: 1px solid rgba(79,124,255,0.3);
+    border-radius: 6px;
+    padding: 12px 14px;
+  }
+
+  .why-box .why-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+
+  .why-box .why-text {
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  /* Dependency graph */
+  .dep-graph {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .dep-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    font-size: 11px;
+  }
+
+  .dep-arrow { color: var(--text-muted); font-size: 14px; }
+
+  .dep-ticket-ref {
+    flex: 1;
+    font-weight: 500;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .dep-ticket-ref:hover { color: var(--accent); }
+
+  .dep-status-chip {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+
+  /* Status indicator */
+  .status-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid transparent;
+  }
+
+  .stage-controls {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .stage-btn {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface3);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.12s;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .stage-btn:hover, .stage-btn.active-stage {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-glow);
+  }
+
+  /* Activity log */
+  .activity-log {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .activity-entry {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+  }
+
+  .activity-time { color: var(--text-muted); white-space: nowrap; }
+  .activity-text { color: var(--text-dim); line-height: 1.4; }
+  .activity-text strong { color: var(--text); font-weight: 600; }
+
+  /* ── MODAL OVERLAY ── */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(4px);
+    z-index: 200;
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border-bright);
+    border-radius: 10px;
+    width: 560px;
+    max-width: 95vw;
+    max-height: 88vh;
+    overflow-y: auto;
+    padding: 28px;
+    position: relative;
+  }
+
+  .modal-title {
+    font-family: var(--sans);
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 22px;
+    color: var(--text);
+  }
+
+  .form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 16px;
+  }
+
+  .form-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .form-label .hint {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .form-input, .form-textarea, .form-select {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 9px 12px;
+    color: var(--text);
+    width: 100%;
+    transition: border-color 0.12s;
+    outline: none;
+  }
+  .form-input:focus, .form-textarea:focus, .form-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+  }
+  .form-textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
+  .form-select option { background: var(--surface2); }
+
+  .form-row-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .modal-footer {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  .close-btn {
+    position: absolute;
+    top: 20px; right: 20px;
+    background: none; border: none;
+    color: var(--text-muted);
+    font-size: 18px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 4px;
+    border-radius: 4px;
+  }
+  .close-btn:hover { color: var(--text); background: var(--surface3); }
+
+  /* ── STATUS REPORT MODAL ── */
+  .report-section {
+    margin-bottom: 18px;
+  }
+
+  .report-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .report-chain {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .report-chain-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: var(--surface2);
+    font-size: 11px;
+  }
+
+  .report-chain-item .chain-id { color: var(--text-muted); width: 55px; flex-shrink: 0; }
+  .report-chain-item .chain-title { flex: 1; color: var(--text); }
+
+  .chain-connector {
+    padding-left: 12px;
+    font-size: 10px;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
+  /* ── TOOLTIPS ── */
+  [data-tip] { position: relative; }
+  [data-tip]::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface3);
+    border: 1px solid var(--border-bright);
+    color: var(--text);
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 50;
+  }
+  [data-tip]:hover::after { opacity: 1; }
+
+  /* scrollbars */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* animations */
+  @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+  .ticket { animation: fadeIn 0.2s ease both; }
+
+  /* priority colors */
+  .pri-critical { background: var(--red); }
+  .pri-high     { background: var(--amber); }
+  .pri-medium   { background: var(--accent); }
+  .pri-low      { background: var(--text-muted); }
+
+  /* status column colors */
+  .col-backlog  .col-indicator { background: var(--text-muted); }
+  .col-active   .col-indicator { background: var(--accent); }
+  .col-blocked  .col-indicator { background: var(--red); }
+  .col-done     .col-indicator { background: var(--green); }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="logo">Dev<span>Flow</span></div>
+  <div class="header-meta">
+    <div class="stat-pill" id="stat-active"><span class="dot" style="background:var(--accent)"></span><span id="cnt-active">0</span> active</div>
+    <div class="stat-pill" id="stat-blocked"><span class="dot" style="background:var(--red)"></span><span id="cnt-blocked">0</span> blocked</div>
+    <div class="stat-pill"><span class="dot" style="background:var(--green)"></span><span id="cnt-done">0</span> done</div>
+    <button class="btn-ghost" onclick="openReport()">📋 Status Report</button>
+    <button class="btn-primary" onclick="openNewTicket()">+ New Ticket</button>
+  </div>
+</header>
+
+<!-- Main layout -->
+<div class="app">
+  <!-- Left Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-label">Views</div>
+      <div class="project-item active" onclick="filterView('all', this)">
+        <span style="font-size:14px">⬡</span> All Tickets
+        <span class="project-count" id="cnt-all">0</span>
+      </div>
+      <div class="project-item" onclick="filterView('blocked', this)">
+        <span style="font-size:14px">⛔</span> Blocked
+        <span class="project-count" id="view-blocked">0</span>
+      </div>
+      <div class="project-item" onclick="filterView('critical-path', this)">
+        <span style="font-size:14px">⚡</span> Critical Path
+        <span class="project-count" id="view-critical">0</span>
+      </div>
+    </div>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">Projects</div>
+      <div id="project-list"></div>
+    </div>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">Quick Actions</div>
+      <div class="project-item" onclick="openNewProject()" style="color:var(--accent)">
+        <span style="font-size:14px">＋</span> New Project
+      </div>
+    </div>
+  </aside>
+
+  <!-- Board -->
+  <main class="board">
+    <div class="board-header">
+      <div class="board-title" id="board-title">All Tickets</div>
+      <div class="board-controls">
+        <span style="font-size:11px;color:var(--text-muted);margin-right:4px">Sort:</span>
+        <button class="filter-btn active" onclick="setSort('priority',this)">Priority</button>
+        <button class="filter-btn" onclick="setSort('project',this)">Project</button>
+        <button class="filter-btn" onclick="setSort('age',this)">Age</button>
+      </div>
+    </div>
+
+    <div class="columns">
+      <div class="column col-backlog" id="col-backlog">
+        <div class="column-header">
+          <div class="column-title"><span class="col-indicator"></span>BACKLOG</div>
+          <div class="column-badge" id="badge-backlog">0</div>
+        </div>
+        <div class="column-body" id="body-backlog"></div>
+      </div>
+      <div class="column col-active" id="col-active">
+        <div class="column-header">
+          <div class="column-title"><span class="col-indicator"></span>IN PROGRESS</div>
+          <div class="column-badge" id="badge-active">0</div>
+        </div>
+        <div class="column-body" id="body-active"></div>
+      </div>
+      <div class="column col-blocked" id="col-blocked">
+        <div class="column-header">
+          <div class="column-title"><span class="col-indicator"></span>BLOCKED</div>
+          <div class="column-badge" id="badge-blocked">0</div>
+        </div>
+        <div class="column-body" id="body-blocked"></div>
+      </div>
+      <div class="column col-done" id="col-done">
+        <div class="column-header">
+          <div class="column-title"><span class="col-indicator"></span>DONE</div>
+          <div class="column-badge" id="badge-done">0</div>
+        </div>
+        <div class="column-body" id="body-done"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Detail Panel -->
+  <aside class="detail-panel" id="detail-panel">
+    <div class="panel-empty" id="panel-empty">
+      <div class="icon">⬡</div>
+      <div style="font-family:var(--sans);font-size:14px;font-weight:600;color:var(--text-dim)">Select a ticket</div>
+      <div style="font-size:11px;line-height:1.5">Click any ticket to see its context,<br>dependencies, and why it exists.</div>
+    </div>
+    <div id="panel-content" style="display:none; flex-direction:column; height:100%"></div>
+  </aside>
+</div>
+
+<!-- NEW TICKET MODAL -->
+<div class="modal-overlay" id="modal-new">
+  <div class="modal">
+    <button class="close-btn" onclick="closeModal('modal-new')">✕</button>
+    <div class="modal-title">New Ticket</div>
+
+    <div class="form-row">
+      <label class="form-label">Title</label>
+      <input class="form-input" id="f-title" placeholder="What needs to be done?" />
+    </div>
+
+    <div class="form-row">
+      <label class="form-label">
+        WHY does this ticket exist?
+        <span class="hint"> — the most important field</span>
+      </label>
+      <textarea class="form-textarea" id="f-why" placeholder="e.g. Project B needs this output as the data pipeline input for Project A's pricing model. Without this, A's AESO forecast module cannot run." style="min-height:90px"></textarea>
+    </div>
+
+    <div class="form-row">
+      <label class="form-label">Description / Notes</label>
+      <textarea class="form-textarea" id="f-desc" placeholder="Technical details, approach, context..."></textarea>
+    </div>
+
+    <div class="form-row-2">
+      <div class="form-row" style="margin-bottom:0">
+        <label class="form-label">Project</label>
+        <select class="form-select" id="f-project">
+          <option value="">— select project —</option>
+        </select>
+      </div>
+      <div class="form-row" style="margin-bottom:0">
+        <label class="form-label">Priority</label>
+        <select class="form-select" id="f-priority">
+          <option value="critical">🔴 Critical</option>
+          <option value="high">🟡 High</option>
+          <option value="medium" selected>🔵 Medium</option>
+          <option value="low">⚪ Low</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label class="form-label">Blocked by <span class="hint"> — ticket IDs this depends on</span></label>
+      <select class="form-select" id="f-blocked-by" multiple style="min-height:70px">
+      </select>
+      <div style="font-size:10px;color:var(--text-muted);margin-top:4px">Hold Ctrl/Cmd to select multiple</div>
+    </div>
+
+    <div class="form-row">
+      <label class="form-label">Initial Status</label>
+      <select class="form-select" id="f-status">
+        <option value="backlog">Backlog</option>
+        <option value="active">In Progress</option>
+        <option value="blocked">Blocked</option>
+      </select>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-new')">Cancel</button>
+      <button class="btn-primary" onclick="createTicket()">Create Ticket</button>
+    </div>
+  </div>
+</div>
+
+<!-- NEW PROJECT MODAL -->
+<div class="modal-overlay" id="modal-project">
+  <div class="modal" style="width:420px">
+    <button class="close-btn" onclick="closeModal('modal-project')">✕</button>
+    <div class="modal-title">New Project</div>
+    <div class="form-row">
+      <label class="form-label">Project Name</label>
+      <input class="form-input" id="fp-name" placeholder="e.g. agent_framework_gem" />
+    </div>
+    <div class="form-row">
+      <label class="form-label">Strategic Goal <span class="hint"> — what is this project ultimately for?</span></label>
+      <textarea class="form-textarea" id="fp-goal" placeholder="e.g. Build synthetic workflow generator for multi-agent test harness..."></textarea>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Color</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap" id="color-picker">
+        <div class="color-swatch" data-color="#4f7cff" style="background:#4f7cff;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectColor(this)"></div>
+        <div class="color-swatch" data-color="#2dd4a0" style="background:#2dd4a0;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectColor(this)"></div>
+        <div class="color-swatch" data-color="#f5a623" style="background:#f5a623;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectColor(this)"></div>
+        <div class="color-swatch" data-color="#ff5f7a" style="background:#ff5f7a;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectColor(this)"></div>
+        <div class="color-swatch" data-color="#a78bfa" style="background:#a78bfa;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectColor(this)"></div>
+        <div class="color-swatch" data-color="#38bdf8" style="background:#38bdf8;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectColor(this)"></div>
+        <div class="color-swatch" data-color="#fb7185" style="background:#fb7185;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectColor(this)"></div>
+        <div class="color-swatch" data-color="#34d399" style="background:#34d399;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectColor(this)"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-project')">Cancel</button>
+      <button class="btn-primary" onclick="createProject()">Create Project</button>
+    </div>
+  </div>
+</div>
+
+<!-- EDIT PROJECT MODAL -->
+<div class="modal-overlay" id="modal-edit-project">
+  <div class="modal" style="width:420px">
+    <button class="close-btn" onclick="closeModal('modal-edit-project')">✕</button>
+    <div class="modal-title">Edit Project</div>
+    <input type="hidden" id="ep-id" />
+    <div class="form-row">
+      <label class="form-label">Project Name</label>
+      <input class="form-input" id="ep-name" placeholder="e.g. agent_framework_gem" />
+    </div>
+    <div class="form-row">
+      <label class="form-label">Strategic Goal</label>
+      <textarea class="form-textarea" id="ep-goal"></textarea>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Color</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap" id="edit-color-picker">
+        <div class="color-swatch" data-color="#4f7cff" style="background:#4f7cff;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectEditColor(this)"></div>
+        <div class="color-swatch" data-color="#2dd4a0" style="background:#2dd4a0;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectEditColor(this)"></div>
+        <div class="color-swatch" data-color="#f5a623" style="background:#f5a623;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectEditColor(this)"></div>
+        <div class="color-swatch" data-color="#ff5f7a" style="background:#ff5f7a;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectEditColor(this)"></div>
+        <div class="color-swatch" data-color="#a78bfa" style="background:#a78bfa;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectEditColor(this)"></div>
+        <div class="color-swatch" data-color="#38bdf8" style="background:#38bdf8;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectEditColor(this)"></div>
+        <div class="color-swatch" data-color="#fb7185" style="background:#fb7185;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectEditColor(this)"></div>
+        <div class="color-swatch" data-color="#34d399" style="background:#34d399;width:24px;height:24px;border-radius:4px;cursor:pointer;border:2px solid transparent" onclick="selectEditColor(this)"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-edit-project')">Cancel</button>
+      <button class="btn-primary" onclick="saveEditProject()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- STATUS REPORT MODAL -->
+<div class="modal-overlay" id="modal-report">
+  <div class="modal" style="width:620px">
+    <button class="close-btn" onclick="closeModal('modal-report')">✕</button>
+    <div class="modal-title">📋 Workflow Status Report</div>
+    <div id="report-body"></div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-report')">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── STATE ──
+let state = {
+  projects: [],
+  tickets: [],
+  nextId: 1,
+  selectedProject: 'all',
+  selectedTicket: null,
+  sortMode: 'priority',
+  activeFilter: 'all',
+  selectedColor: '#4f7cff'
+};
+
+// ── MCP HTTP API connection ──
+const DEVFLOW_API = 'http://localhost:7117';
+let _apiAvailable = false;
+
+async function loadState() {
+  // Try MCP HTTP API first, fall back to localStorage
+  try {
+    const res = await fetch(`${DEVFLOW_API}/api/state`);
+    if (res.ok) {
+      const remote = await res.json();
+      state = { ...state, ...remote };
+      _apiAvailable = true;
+      // Sync next_id → nextId naming
+      if (remote.next_id) state.nextId = remote.next_id;
+      return;
+    }
+  } catch(e) {}
+
+  // Fallback: localStorage
+  try {
+    const saved = localStorage.getItem('devflow_state');
+    if (saved) {
+      state = { ...state, ...JSON.parse(saved) };
+    }
+  } catch(e) {}
+}
+
+function saveState() {
+  // Always save to localStorage as backup
+  try {
+    localStorage.setItem('devflow_state', JSON.stringify(state));
+  } catch(e) {}
+
+  // If API available, sync to MCP state file
+  if (_apiAvailable) {
+    const payload = {
+      projects: state.projects,
+      tickets: state.tickets,
+      next_id: state.nextId
+    };
+    fetch(`${DEVFLOW_API}/api/state`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).catch(() => {});
+  }
+}
+
+// ── SEED DATA ──
+function seedDemo() {
+  if (state.projects.length > 0) return;
+  
+  state.projects = [
+    { id: 'proj-a', name: 'project_alpha', goal: 'AESO forecast pricing model — main deliverable for client', color: '#4f7cff' },
+    { id: 'proj-b', name: 'project_beta', goal: 'Data pipeline that feeds forecast inputs to project_alpha', color: '#f5a623' },
+    { id: 'proj-c', name: 'agent_framework', goal: 'Multi-agent orchestration layer for automation workflows', color: '#2dd4a0' },
+  ];
+
+  const now = Date.now();
+  state.tickets = [
+    {
+      id: 'T-001', title: 'Build AESO hourly data loader', projectId: 'proj-b',
+      why: 'project_alpha\'s forecast engine requires clean hourly AESO interval data as its primary input. This ticket MUST complete before T-003 can run.',
+      desc: 'Parse and normalize 26M row historical dataset. Output parquet to /data/aeso_clean/',
+      status: 'active', priority: 'critical',
+      blockedBy: [], blocksTickets: ['T-003'],
+      created: now - 86400000 * 3, log: [{ t: now - 86400000 * 3, msg: 'Ticket created' }, { t: now - 86400000 * 1, msg: 'Status → In Progress' }]
+    },
+    {
+      id: 'T-002', title: 'Schema-driven config for pipeline YAML', projectId: 'proj-b',
+      why: 'Pipeline inputs change per client engagement. YAML-based config lets project_alpha ingest from project_beta without hard-coded paths.',
+      desc: 'NetworkX dependency manager integration. Mirror existing schema-driven Excel framework.',
+      status: 'backlog', priority: 'high',
+      blockedBy: [], blocksTickets: ['T-003'],
+      created: now - 86400000 * 2, log: [{ t: now - 86400000 * 2, msg: 'Ticket created' }]
+    },
+    {
+      id: 'T-003', title: 'Wire pipeline output → forecast engine', projectId: 'proj-a',
+      why: 'Core integration point. project_alpha cannot produce any forecast until project_beta\'s data loader (T-001) and YAML config (T-002) are both complete.',
+      desc: 'Connect /data/aeso_clean/ output path to forecast model input handler. Add validation layer.',
+      status: 'blocked', priority: 'critical',
+      blockedBy: ['T-001', 'T-002'], blocksTickets: ['T-004'],
+      created: now - 86400000 * 2, log: [{ t: now - 86400000 * 2, msg: 'Ticket created' }, { t: now - 86400000 * 1, msg: 'Status → Blocked (waiting on T-001, T-002)' }]
+    },
+    {
+      id: 'T-004', title: 'AESO price forecast model — v1', projectId: 'proj-a',
+      why: 'Main deliverable. Produces forward price curve for client Alberta procurement strategy.',
+      desc: 'ML model implementation. Feature engineering from pipeline output.',
+      status: 'backlog', priority: 'critical',
+      blockedBy: ['T-003'], blocksTickets: [],
+      created: now - 86400000 * 1, log: [{ t: now - 86400000 * 1, msg: 'Ticket created' }]
+    },
+    {
+      id: 'T-005', title: 'MonitoringBus heartbeat integration', projectId: 'proj-c',
+      why: 'Agent observability layer needs heartbeat signals before any agent can be deployed to staging. Unblocks parallel work on SupervisorAgent.',
+      desc: 'Implement HeartbeatMonitor, connect to MonitoringBus pattern.',
+      status: 'active', priority: 'medium',
+      blockedBy: [], blocksTickets: ['T-006'],
+      created: now - 86400000 * 4, log: [{ t: now - 86400000 * 4, msg: 'Ticket created' }, { t: now - 86400000 * 2, msg: 'Status → In Progress' }]
+    },
+    {
+      id: 'T-006', title: 'SupervisorAgent scaffolding', projectId: 'proj-c',
+      why: 'Cannot scaffold supervisor until heartbeat signals are reliable. T-005 is the prerequisite.',
+      desc: 'Build SupervisorAgent class, wire to MonitoringBus events.',
+      status: 'blocked', priority: 'medium',
+      blockedBy: ['T-005'], blocksTickets: [],
+      created: now - 86400000 * 3, log: [{ t: now - 86400000 * 3, msg: 'Ticket created' }, { t: now - 86400000 * 1, msg: 'Status → Blocked on T-005' }]
+    },
+  ];
+  state.nextId = 7;
+  saveState();
+}
+
+// ── HELPERS ──
+function getProject(id) { return state.projects.find(p => p.id === id); }
+function getTicket(id) { return state.tickets.find(t => t.id === id); }
+
+function priOrder(p) { return { critical:0, high:1, medium:2, low:3 }[p] ?? 4; }
+
+function timeAgo(ts) {
+  const d = Date.now() - ts;
+  if (d < 3600000) return Math.floor(d/60000) + 'm ago';
+  if (d < 86400000) return Math.floor(d/3600000) + 'h ago';
+  return Math.floor(d/86400000) + 'd ago';
+}
+
+function statusColor(s) {
+  return { backlog:'var(--text-muted)', active:'var(--accent)', blocked:'var(--red)', done:'var(--green)' }[s];
+}
+
+function isBlocked(ticket) {
+  return ticket.blockedBy.some(id => {
+    const dep = getTicket(id);
+    return dep && dep.status !== 'done';
+  });
+}
+
+// ── RENDER ──
+function render() {
+  renderSidebar();
+  renderBoard();
+  renderStats();
+  if (state.selectedTicket) renderDetail(state.selectedTicket);
+  saveState();
+}
+
+function renderStats() {
+  const active = state.tickets.filter(t => t.status === 'active').length;
+  const blocked = state.tickets.filter(t => t.status === 'blocked').length;
+  const done = state.tickets.filter(t => t.status === 'done').length;
+  document.getElementById('cnt-active').textContent = active;
+  document.getElementById('cnt-blocked').textContent = blocked;
+  document.getElementById('cnt-done').textContent = done;
+  document.getElementById('cnt-all').textContent = state.tickets.length;
+  document.getElementById('view-blocked').textContent = blocked;
+  // critical path = tickets with blockedBy or blocksTickets
+  const cp = state.tickets.filter(t => t.blockedBy.length > 0 || t.blocksTickets.length > 0).length;
+  document.getElementById('view-critical').textContent = cp;
+}
+
+function renderSidebar() {
+  const list = document.getElementById('project-list');
+  list.innerHTML = '';
+  state.projects.forEach(p => {
+    const count = state.tickets.filter(t => t.projectId === p.id).length;
+    const div = document.createElement('div');
+    div.className = 'project-item' + (state.selectedProject === p.id ? ' active' : '');
+    div.innerHTML = `
+      <span class="project-dot" style="background:${p.color}"></span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.name}</span>
+      <span class="project-count">${count}</span>
+      <span class="project-actions">
+        <button class="proj-btn" title="Rename" onclick="openEditProject(event,'${p.id}')">✎</button>
+        <button class="proj-btn del" title="Delete" onclick="confirmDeleteProject(event,'${p.id}')">✕</button>
+      </span>`;
+    div.onclick = (e) => {
+      if (e.target.closest('.project-actions')) return;
+      filterProject(p.id, div);
+    };
+    list.appendChild(div);
+  });
+}
+
+function getFilteredTickets() {
+  let tickets = [...state.tickets];
+  
+  if (state.selectedProject !== 'all') {
+    tickets = tickets.filter(t => t.projectId === state.selectedProject);
+  }
+  if (state.activeFilter === 'blocked') {
+    tickets = tickets.filter(t => t.status === 'blocked');
+  } else if (state.activeFilter === 'critical-path') {
+    tickets = tickets.filter(t => t.blockedBy.length > 0 || t.blocksTickets.length > 0);
+  }
+
+  if (state.sortMode === 'priority') tickets.sort((a,b) => priOrder(a.priority) - priOrder(b.priority));
+  else if (state.sortMode === 'project') tickets.sort((a,b) => (a.projectId||'').localeCompare(b.projectId||''));
+  else if (state.sortMode === 'age') tickets.sort((a,b) => a.created - b.created);
+
+  return tickets;
+}
+
+function renderBoard() {
+  const tickets = getFilteredTickets();
+  const cols = ['backlog','active','blocked','done'];
+  
+  cols.forEach(col => {
+    const body = document.getElementById('body-' + col);
+    const badge = document.getElementById('badge-' + col);
+    const colTickets = tickets.filter(t => t.status === col);
+    badge.textContent = colTickets.length;
+    body.innerHTML = '';
+    colTickets.forEach(t => body.appendChild(buildTicketCard(t)));
+  });
+}
+
+function buildTicketCard(t) {
+  const proj = getProject(t.projectId);
+  const div = document.createElement('div');
+  div.className = 'ticket' + (state.selectedTicket === t.id ? ' selected' : '');
+  div.onclick = () => selectTicket(t.id);
+
+  const hasDepsBlocking = t.blockedBy.some(id => { const d = getTicket(id); return d && d.status !== 'done'; });
+  const isBlockingOthers = t.blocksTickets.length > 0;
+  
+  let depBadges = '';
+  if (hasDepsBlocking) depBadges += `<span class="dep-badge blocked">⛔ blocked</span>`;
+  if (isBlockingOthers) {
+    const blockingActive = t.blocksTickets.some(id => { const d = getTicket(id); return d && d.status !== 'done'; });
+    if (blockingActive) depBadges += `<span class="dep-badge blocking">⚠ blocking ${t.blocksTickets.length}</span>`;
+  }
+  if (!hasDepsBlocking && !isBlockingOthers) depBadges = `<span class="dep-badge ready">✓ free</span>`;
+
+  div.innerHTML = `
+    <div class="ticket-top">
+      <span class="ticket-id">${t.id}</span>
+      <span class="ticket-priority pri-${t.priority}" title="${t.priority}"></span>
+    </div>
+    <div class="ticket-title">${t.title}</div>
+    ${proj ? `<span class="ticket-project-tag" style="background:${proj.color}22;color:${proj.color};border:1px solid ${proj.color}44"><span style="width:5px;height:5px;border-radius:50%;background:${proj.color};display:inline-block"></span>${proj.name}</span>` : ''}
+    <div class="ticket-footer">
+      ${depBadges}
+      <span class="ticket-age">${timeAgo(t.created)}</span>
+    </div>
+  `;
+  return div;
+}
+
+function selectTicket(id) {
+  state.selectedTicket = id;
+  renderBoard();
+  renderDetail(id);
+}
+
+function renderDetail(id) {
+  const t = getTicket(id);
+  if (!t) return;
+  const proj = getProject(t.projectId);
+
+  document.getElementById('panel-empty').style.display = 'none';
+  const content = document.getElementById('panel-content');
+  content.style.display = 'flex';
+
+  const statusColors = { backlog:'var(--text-muted)', active:'var(--accent)', blocked:'var(--red)', done:'var(--green)' };
+  const statusLabels = { backlog:'Backlog', active:'In Progress', blocked:'Blocked', done:'Done' };
+
+  // Build blocked-by rows
+  let blockedByHtml = '';
+  if (t.blockedBy.length === 0) {
+    blockedByHtml = `<div style="font-size:11px;color:var(--text-muted)">No dependencies</div>`;
+  } else {
+    t.blockedBy.forEach(depId => {
+      const dep = getTicket(depId);
+      if (!dep) return;
+      const done = dep.status === 'done';
+      blockedByHtml += `
+        <div class="dep-row">
+          <span style="color:var(--text-muted);font-size:12px">↑</span>
+          <span class="dep-ticket-ref" onclick="selectTicket('${dep.id}')">${dep.id} — ${dep.title}</span>
+          <span class="dep-status-chip" style="background:${statusColors[dep.status]}22;color:${statusColors[dep.status]};border:1px solid ${statusColors[dep.status]}44">${statusLabels[dep.status]}</span>
+        </div>`;
+    });
+  }
+
+  // Build blocks rows
+  let blocksHtml = '';
+  if (t.blocksTickets.length === 0) {
+    blocksHtml = `<div style="font-size:11px;color:var(--text-muted)">Blocks nothing</div>`;
+  } else {
+    t.blocksTickets.forEach(depId => {
+      const dep = getTicket(depId);
+      if (!dep) return;
+      blocksHtml += `
+        <div class="dep-row">
+          <span style="color:var(--amber);font-size:12px">↓</span>
+          <span class="dep-ticket-ref" onclick="selectTicket('${dep.id}')">${dep.id} — ${dep.title}</span>
+          <span class="dep-status-chip" style="background:${statusColors[dep.status]}22;color:${statusColors[dep.status]};border:1px solid ${statusColors[dep.status]}44">${statusLabels[dep.status]}</span>
+        </div>`;
+    });
+  }
+
+  // Activity log
+  const logHtml = [...t.log].reverse().slice(0, 8).map(entry => `
+    <div class="activity-entry">
+      <span class="activity-time">${timeAgo(entry.t)}</span>
+      <span class="activity-text">${entry.msg}</span>
+    </div>
+  `).join('');
+
+  content.innerHTML = `
+    <div class="panel-header">
+      <span class="panel-ticket-id">${t.id} · ${proj ? proj.name : 'no project'}</span>
+      <div style="display:flex;gap:6px">
+        <button class="btn-ghost" style="padding:5px 10px;font-size:10px" onclick="deleteTicket('${t.id}')">Delete</button>
+      </div>
+    </div>
+    <div class="panel-body">
+      <div class="panel-title">${t.title}</div>
+
+      <div class="why-box">
+        <div class="why-label">⚡ WHY THIS EXISTS</div>
+        <div class="why-text">${t.why || '<em style="color:var(--text-muted)">No rationale captured. Edit to add context.</em>'}</div>
+      </div>
+
+      ${t.desc ? `<div class="field-group"><div class="field-label">Description</div><div class="field-value">${t.desc}</div></div>` : ''}
+
+      <div class="field-group">
+        <div class="field-label">Status</div>
+        <div class="stage-controls">
+          ${['backlog','active','blocked','done'].map(s => `
+            <button class="stage-btn ${t.status === s ? 'active-stage' : ''}" onclick="setStatus('${t.id}','${s}')">${{backlog:'Backlog',active:'In Progress',blocked:'Blocked',done:'Done'}[s]}</button>
+          `).join('')}
+        </div>
+      </div>
+
+      <div class="field-group">
+        <div class="field-label">↑ Blocked By (this ticket waits on)</div>
+        <div class="dep-graph">${blockedByHtml}</div>
+      </div>
+
+      <div class="field-group">
+        <div class="field-label">↓ Blocks (these tickets wait on this)</div>
+        <div class="dep-graph">${blocksHtml}</div>
+      </div>
+
+      <div class="field-group">
+        <div class="field-label">Activity</div>
+        <div class="activity-log">${logHtml}</div>
+      </div>
+    </div>
+  `;
+}
+
+function setStatus(ticketId, newStatus) {
+  const t = getTicket(ticketId);
+  if (!t) return;
+  const old = t.status;
+  t.status = newStatus;
+  t.log.push({ t: Date.now(), msg: `Status: <strong>${old}</strong> → <strong>${newStatus}</strong>` });
+  render();
+}
+
+function deleteTicket(id) {
+  if (!confirm('Delete this ticket?')) return;
+  state.tickets = state.tickets.filter(t => t.id !== id);
+  // remove from other tickets' deps
+  state.tickets.forEach(t => {
+    t.blockedBy = t.blockedBy.filter(x => x !== id);
+    t.blocksTickets = t.blocksTickets.filter(x => x !== id);
+  });
+  state.selectedTicket = null;
+  document.getElementById('panel-empty').style.display = '';
+  document.getElementById('panel-content').style.display = 'none';
+  render();
+}
+
+// ── FILTERS ──
+function filterProject(id, el) {
+  state.selectedProject = id;
+  state.activeFilter = 'all';
+  document.querySelectorAll('.project-item').forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+  const proj = getProject(id);
+  document.getElementById('board-title').textContent = proj ? proj.name : 'All Tickets';
+  render();
+}
+
+function filterView(view, el) {
+  state.activeFilter = view;
+  state.selectedProject = 'all';
+  document.querySelectorAll('.project-item').forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+  const titles = { all:'All Tickets', blocked:'Blocked Tickets', 'critical-path':'Critical Path' };
+  document.getElementById('board-title').textContent = titles[view];
+  render();
+}
+
+function setSort(mode, el) {
+  state.sortMode = mode;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  render();
+}
+
+// ── CREATE TICKET ──
+function openNewTicket() {
+  // Populate project dropdown
+  const sel = document.getElementById('f-project');
+  sel.innerHTML = '<option value="">— select project —</option>';
+  state.projects.forEach(p => {
+    sel.innerHTML += `<option value="${p.id}">${p.name}</option>`;
+  });
+  
+  // Populate blocked-by
+  const bb = document.getElementById('f-blocked-by');
+  bb.innerHTML = '';
+  state.tickets.filter(t => t.status !== 'done').forEach(t => {
+    bb.innerHTML += `<option value="${t.id}">${t.id}: ${t.title}</option>`;
+  });
+
+  document.getElementById('modal-new').classList.add('open');
+}
+
+function createTicket() {
+  const title = document.getElementById('f-title').value.trim();
+  if (!title) { alert('Title is required.'); return; }
+  
+  const id = 'T-' + String(state.nextId++).padStart(3,'0');
+  const blockedBy = Array.from(document.getElementById('f-blocked-by').selectedOptions).map(o => o.value);
+  const status = document.getElementById('f-status').value;
+
+  const t = {
+    id, title,
+    why: document.getElementById('f-why').value.trim(),
+    desc: document.getElementById('f-desc').value.trim(),
+    projectId: document.getElementById('f-project').value,
+    priority: document.getElementById('f-priority').value,
+    status,
+    blockedBy,
+    blocksTickets: [],
+    created: Date.now(),
+    log: [{ t: Date.now(), msg: `Ticket created` }]
+  };
+
+  // Update reverse deps
+  blockedBy.forEach(depId => {
+    const dep = getTicket(depId);
+    if (dep && !dep.blocksTickets.includes(id)) dep.blocksTickets.push(id);
+  });
+
+  state.tickets.push(t);
+  closeModal('modal-new');
+  
+  // Clear form
+  ['f-title','f-why','f-desc'].forEach(id => document.getElementById(id).value = '');
+  
+  render();
+  selectTicket(t.id);
+}
+
+// ── PROJECT ──
+function openNewProject() {
+  state.selectedColor = '#4f7cff';
+  document.querySelectorAll('.color-swatch').forEach(s => s.style.border = '2px solid transparent');
+  document.querySelector('[data-color="#4f7cff"]').style.border = '2px solid white';
+  document.getElementById('modal-project').classList.add('open');
+}
+
+function selectColor(el) {
+  state.selectedColor = el.dataset.color;
+  document.querySelectorAll('.color-swatch').forEach(s => s.style.border = '2px solid transparent');
+  el.style.border = '2px solid white';
+}
+
+function createProject() {
+  const name = document.getElementById('fp-name').value.trim();
+  if (!name) { alert('Project name required.'); return; }
+  state.projects.push({
+    id: 'proj-' + Date.now(),
+    name,
+    goal: document.getElementById('fp-goal').value.trim(),
+    color: state.selectedColor
+  });
+  document.getElementById('fp-name').value = '';
+  document.getElementById('fp-goal').value = '';
+  closeModal('modal-project');
+  render();
+}
+
+// ── STATUS REPORT ──
+function openReport() {
+  const body = document.getElementById('report-body');
+  let html = '';
+
+  // Blocked summary
+  const blocked = state.tickets.filter(t => t.status === 'blocked');
+  if (blocked.length > 0) {
+    html += `<div class="report-section">
+      <div class="report-section-title">🔴 Blocked — Needs Attention</div>`;
+    blocked.forEach(t => {
+      const depNames = t.blockedBy.map(id => {
+        const d = getTicket(id);
+        return d ? `<span style="color:${d.status==='done'?'var(--green)':'var(--amber)'}">${id} (${d.status})</span>` : id;
+      }).join(', ');
+      html += `<div class="report-chain">
+        <div class="report-chain-item">
+          <span class="chain-id">${t.id}</span>
+          <span class="chain-title">${t.title}</span>
+        </div>
+        <div class="chain-connector">↳ waiting on: ${depNames || '—'}</div>
+        <div class="chain-connector" style="color:var(--accent);font-style:normal">⚡ WHY: ${t.why || '(no rationale captured)'}</div>
+      </div><br>`;
+    });
+    html += `</div>`;
+  }
+
+  // Active work
+  const active = state.tickets.filter(t => t.status === 'active');
+  if (active.length > 0) {
+    html += `<div class="report-section">
+      <div class="report-section-title">🔵 In Progress</div>`;
+    active.forEach(t => {
+      const unlocks = t.blocksTickets.filter(id => { const d = getTicket(id); return d && d.status !== 'done'; });
+      html += `<div class="report-chain">
+        <div class="report-chain-item">
+          <span class="chain-id">${t.id}</span>
+          <span class="chain-title">${t.title}</span>
+        </div>
+        ${unlocks.length ? `<div class="chain-connector" style="color:var(--amber)">↳ completing this unblocks: ${unlocks.join(', ')}</div>` : ''}
+        <div class="chain-connector" style="color:var(--accent);font-style:normal">⚡ WHY: ${t.why || '(no rationale captured)'}</div>
+      </div><br>`;
+    });
+    html += `</div>`;
+  }
+
+  // Dependency chains
+  html += `<div class="report-section">
+    <div class="report-section-title">⚡ Dependency Chains</div>`;
+  
+  // Find root tickets (nothing blocks them)
+  const roots = state.tickets.filter(t => t.blockedBy.length === 0 && t.blocksTickets.length > 0 && t.status !== 'done');
+  if (roots.length === 0) {
+    html += `<div style="font-size:11px;color:var(--text-muted)">No active dependency chains found.</div>`;
+  } else {
+    roots.forEach(root => {
+      html += `<div class="report-chain">`;
+      function renderChainNode(tid, depth) {
+        const t = getTicket(tid);
+        if (!t) return;
+        const indent = '  '.repeat(depth);
+        html += `<div class="report-chain-item" style="margin-left:${depth*16}px">
+          <span class="chain-id" style="color:${statusColor(t.status)}">${t.id}</span>
+          <span class="chain-title">${t.title}</span>
+          <span style="font-size:10px;color:${statusColor(t.status)};margin-left:4px">[${t.status}]</span>
+        </div>`;
+        if (t.blocksTickets.length) {
+          html += `<div class="chain-connector" style="margin-left:${depth*16}px">↓ unlocks</div>`;
+          t.blocksTickets.forEach(nid => renderChainNode(nid, depth+1));
+        }
+      }
+      renderChainNode(root.id, 0);
+      html += `</div><br>`;
+    });
+  }
+  html += `</div>`;
+
+  body.innerHTML = html;
+  document.getElementById('modal-report').classList.add('open');
+}
+
+// ── MODAL ──
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.classList.remove('open');
+  });
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open'));
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openNewTicket(); }
+});
+
+// ── INIT ──
+(async () => {
+  await loadState();
+  if (!_apiAvailable) seedDemo();
+  render();
+})();
+</script>
+</body>
+</html>

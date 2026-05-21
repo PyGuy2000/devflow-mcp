@@ -1,0 +1,5 @@
+{
+  "projecthub_db_path": "/path/to/your/projecthub.db",
+  "auto_time_entries": true,
+  "default_classification": "personal"
+}

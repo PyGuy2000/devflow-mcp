@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# Runtime
+logs/
+*.log
+
+# State file — contains your personal tickets. Do not commit.
+devflow_state.json
+
+# Local editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local override (optional)
+config.local.json
