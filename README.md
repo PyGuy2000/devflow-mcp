@@ -124,6 +124,8 @@ python3 http_api.py
 
 The UI shows all projects, tickets, and status filters. No authentication (localhost only).
 
+![DevFlow web UI](docs/images/devflow-web-ui.png)
+
 ## ProjectHub bridge
 
 DevFlow can optionally sync ticket state to an external SQLite database for time tracking and portfolio health. When a ticket moves to "active," a time entry starts. When it moves to "done," the timer stops and hours are calculated.
