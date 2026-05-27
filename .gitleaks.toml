@@ -1,0 +1,84 @@
+title = "PyGuy2000 app gitleaks config"
+
+[extend]
+useDefault = true
+
+# ----------------------------------------------------------------------
+# Custom rules — secrets the homelab actually uses
+# ----------------------------------------------------------------------
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[a-zA-Z0-9_-]{20,}'''
+keywords = ["sk-ant-"]
+
+[[rules]]
+id = "openai-api-key"
+description = "OpenAI API key"
+regex = '''sk-[a-zA-Z0-9]{40,}'''
+keywords = ["sk-"]
+
+[[rules]]
+id = "github-fine-grained-pat"
+description = "GitHub fine-grained PAT"
+regex = '''github_pat_[a-zA-Z0-9_]{20,}'''
+keywords = ["github_pat_"]
+
+[[rules]]
+id = "github-oauth-token"
+description = "GitHub OAuth user token (gho_)"
+regex = '''gho_[a-zA-Z0-9]{30,}'''
+keywords = ["gho_"]
+
+[[rules]]
+id = "github-classic-pat"
+description = "GitHub classic PAT (ghp_)"
+regex = '''ghp_[a-zA-Z0-9]{30,}'''
+keywords = ["ghp_"]
+
+[[rules]]
+id = "huggingface-token"
+description = "Hugging Face token"
+regex = '''hf_[a-zA-Z0-9]{30,}'''
+keywords = ["hf_"]
+
+[[rules]]
+id = "telegram-bot-token"
+description = "Telegram bot token"
+regex = '''[0-9]{8,10}:[A-Za-z0-9_-]{30,}'''
+keywords = [":AAH", ":AAE", ":AAF", ":AAG"]
+
+[[rules]]
+id = "google-api-key"
+description = "Google API key (AIza)"
+regex = '''AIza[0-9A-Za-z_-]{30,}'''
+keywords = ["AIza"]
+
+# ----------------------------------------------------------------------
+# Allowlist — files and patterns that may legitimately contain key shapes
+# ----------------------------------------------------------------------
+[allowlist]
+description = "App-repo allowlist"
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)\.env\.template$''',
+  '''(^|/)\.gitleaks\.toml$''',
+  '''(^|/)README\.md$''',
+  '''(^|/)CHANGELOG\.md$''',
+  '''(^|/)docs/.*\.md$''',
+  '''(^|/)tests?/fixtures?/''',
+  '''(^|/)tests?/mocks?/''',
+  '''(^|/)__tests__/''',
+  '''(^|/)examples?/''',
+]
+regexes = [
+  '''sk-ant-XXXX''',
+  '''sk-ant-\[REDACTED\]''',
+  '''sk-ant-(your|placeholder|example|sample|dummy)''',
+  '''github_pat_<.*>''',
+  '''AIza[X]{4,}''',
+  '''your[_-]?api[_-]?key''',
+  '''YOUR[_-]?API[_-]?KEY''',
+  '''<your[_-]token>''',
+]
