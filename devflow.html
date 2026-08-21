@@ -797,6 +797,38 @@
   .pri-medium   { background: var(--accent); }
   .pri-low      { background: var(--text-muted); }
 
+  /* ── GLOBAL SEARCH (T-582) ── */
+  .search-wrap { position: relative; min-width: 300px; }
+  .search-input {
+    width: 100%; font-family: var(--mono); font-size: 12px;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); padding: 7px 12px 7px 30px; border-radius: 5px; outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .search-input:focus { border-color: var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
+  .search-input::placeholder { color: var(--text-muted); }
+  .search-wrap::before { content:'⌕'; position:absolute; left:10px; top:5px; color:var(--text-dim); font-size:15px; pointer-events:none; }
+  .search-results {
+    position:absolute; top: calc(100% + 6px); right:0; width: 480px; max-height: 62vh; overflow-y:auto;
+    background: var(--surface); border:1px solid var(--border-bright); border-radius:8px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.55); z-index:200; display:none;
+  }
+  .search-results.open { display:block; }
+  .search-group-label {
+    font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--text-dim);
+    padding:8px 12px 4px; display:flex; align-items:center; gap:6px;
+    position:sticky; top:0; background:var(--surface); z-index:1;
+  }
+  .search-row { display:flex; align-items:center; gap:8px; padding:7px 12px; cursor:pointer; border-top:1px solid var(--border); }
+  .search-row:hover, .search-row.kb-focus { background: var(--surface2); }
+  .search-row .sr-id { font-size:11px; color:var(--accent); font-weight:700; white-space:nowrap; }
+  .search-row .sr-title { flex:1; font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .search-row .sr-where { font-size:9px; color:var(--text-muted); white-space:nowrap; }
+  .search-row .sr-status { font-size:9px; text-transform:uppercase; letter-spacing:.5px; padding:2px 7px; border-radius:3px; white-space:nowrap; }
+  .search-empty { padding:12px 14px; font-size:11px; color:var(--text-muted); border-top:1px solid var(--border); }
+  @keyframes searchFlash { 0% { box-shadow:0 0 0 2px var(--accent), 0 0 24px var(--accent-glow); } 100% { box-shadow:none; } }
+  .ticket.search-flash { animation: searchFlash 1.6s ease-out 2; }
+
   /* status column colors */
   .col-backlog  .col-indicator { background: var(--text-muted); }
   .col-active   .col-indicator { background: var(--accent); }
@@ -810,6 +842,10 @@
 <header>
   <div class="logo">Dev<span>Flow</span></div>
   <div class="header-meta">
+    <div class="search-wrap">
+      <input class="search-input" id="global-search" placeholder="Search all projects — title, why, logs…  ( / )" autocomplete="off" />
+      <div class="search-results" id="search-results"></div>
+    </div>
     <div class="stat-pill" id="stat-active"><span class="dot" style="background:var(--accent)"></span><span id="cnt-active">0</span> active</div>
     <div class="stat-pill" id="stat-blocked"><span class="dot" style="background:var(--red)"></span><span id="cnt-blocked">0</span> blocked</div>
     <div class="stat-pill"><span class="dot" style="background:var(--green)"></span><span id="cnt-done">0</span> done</div>
@@ -1107,6 +1143,19 @@ function saveState() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
+    }).then(async res => {
+      // 409 = the server refused a stale snapshot (its next_id is ahead of
+      // ours, i.e. this tab has been open across writes it never saw). Say so
+      // loudly — a silent .catch() is what let the 2026-07-28 clobber look
+      // like a successful save.
+      if (res.status === 409) {
+        let detail = '';
+        try { detail = (await res.json()).detail || ''; } catch(e) {}
+        alert(
+          'DevFlow: this tab is out of date, so your change was NOT saved.\n\n' +
+          detail + '\n\nReload the page to pick up the current state, then redo it.'
+        );
+      }
     }).catch(() => {});
   }
 }
@@ -1201,12 +1250,18 @@ function isBlocked(ticket) {
 }
 
 // ── RENDER ──
+// NOTE: render() must NEVER call saveState(). It is called by view-only paths
+// (filterProject / filterView / setSort / init), so persisting here meant every
+// re-render POSTed the tab's whole in-memory state over the server's. A tab left
+// open on a stale snapshot then erased everything newer on its first click —
+// that is how T-366..T-497 (132 tickets) were lost on 2026-07-28.
+// Persist from the mutation functions only (setStatus / deleteTicket /
+// createTicket / createProject), never from a render.
 function render() {
   renderSidebar();
   renderBoard();
   renderStats();
   if (state.selectedTicket) renderDetail(state.selectedTicket);
-  saveState();
 }
 
 function renderStats() {
@@ -1246,9 +1301,134 @@ function renderSidebar() {
   });
 }
 
+// ── GLOBAL SEARCH (T-582) ──
+// Cross-project recall: matches id / title / why / desc / project name AND
+// work-log text (the MCP search_tickets tool misses logs — they carry the
+// breadcrumbs). View-only: never touches saveState (see render() note above).
+// searchQuery is deliberately NOT on `state` so it can never ride a POST.
+let searchQuery = '';
+let _preSearchTitle = null;
+let _searchKbIndex = -1;
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function ticketMatches(t, q) {
+  if (t.id.toLowerCase().includes(q)) return true;
+  if ((t.title || '').toLowerCase().includes(q)) return true;
+  if ((t.why || '').toLowerCase().includes(q)) return true;
+  if ((t.desc || '').toLowerCase().includes(q)) return true;
+  const proj = getProject(t.projectId);
+  if (proj && proj.name.toLowerCase().includes(q)) return true;
+  return (t.log || []).some(e => (e.msg || '').toLowerCase().includes(q));
+}
+
+function matchWhere(t, q) {
+  if (t.id.toLowerCase().includes(q) || (t.title || '').toLowerCase().includes(q)) return 'title';
+  if ((t.why || '').toLowerCase().includes(q)) return 'why';
+  if ((t.desc || '').toLowerCase().includes(q)) return 'desc';
+  if ((t.log || []).some(e => (e.msg || '').toLowerCase().includes(q))) return 'log';
+  return 'project';
+}
+
+function onSearchInput(val) {
+  const wasEmpty = !searchQuery.trim();
+  searchQuery = val;
+  const q = val.trim().toLowerCase();
+  const results = document.getElementById('search-results');
+  _searchKbIndex = -1;
+  if (!q) {
+    results.classList.remove('open');
+    if (_preSearchTitle !== null) {
+      document.getElementById('board-title').textContent = _preSearchTitle;
+      _preSearchTitle = null;
+    }
+    render();
+    return;
+  }
+  if (wasEmpty && _preSearchTitle === null) {
+    _preSearchTitle = document.getElementById('board-title').textContent;
+  }
+  renderSearchResults(q);
+  const n = state.tickets.filter(t => ticketMatches(t, q)).length;
+  document.getElementById('board-title').textContent = `Search: “${val.trim()}” — ${n} hit${n === 1 ? '' : 's'}`;
+  render(); // the board live-filters via getFilteredTickets
+}
+
+function renderSearchResults(q) {
+  const results = document.getElementById('search-results');
+  const hits = state.tickets.filter(t => ticketMatches(t, q));
+  const statusColors = { backlog:'var(--text-muted)', active:'var(--accent)', blocked:'var(--red)', done:'var(--green)' };
+  if (!hits.length) {
+    results.innerHTML = `<div class="search-empty">No tickets match “${escHtml(q)}” — searched titles, why, desc and work logs across ${state.projects.length} projects.</div>`;
+    results.classList.add('open');
+    return;
+  }
+  const byProj = {};
+  hits.forEach(t => { (byProj[t.projectId] = byProj[t.projectId] || []).push(t); });
+  let html = '';
+  Object.keys(byProj).sort().forEach(pid => {
+    const proj = getProject(pid);
+    html += `<div class="search-group-label"><span style="width:6px;height:6px;border-radius:50%;background:${proj ? proj.color : '#888'};display:inline-block"></span>${escHtml(proj ? proj.name : 'no project')} · ${byProj[pid].length}</div>`;
+    byProj[pid].sort((a, b) => priOrder(a.priority) - priOrder(b.priority)).slice(0, 12).forEach(t => {
+      const c = statusColors[t.status] || 'var(--text-muted)';
+      html += `<div class="search-row" data-tid="${t.id}" onclick="jumpToTicket('${t.id}')">
+        <span class="sr-id">${t.id}</span>
+        <span class="sr-title">${escHtml(t.title)}</span>
+        <span class="sr-where">${matchWhere(t, q)}</span>
+        <span class="sr-status" style="background:${c}22;color:${c};border:1px solid ${c}44">${t.status}</span>
+      </div>`;
+    });
+    if (byProj[pid].length > 12) {
+      html += `<div class="search-empty">…${byProj[pid].length - 12} more in this project — the board below shows all hits</div>`;
+    }
+  });
+  results.innerHTML = html;
+  results.classList.add('open');
+}
+
+function jumpToTicket(id) {
+  const t = getTicket(id);
+  if (!t) return;
+  // leave search mode and land in the ticket's project context
+  searchQuery = '';
+  document.getElementById('global-search').value = '';
+  document.getElementById('search-results').classList.remove('open');
+  _preSearchTitle = null;
+  state.activeFilter = 'all';
+  state.selectedProject = t.projectId || 'all';
+  const proj = getProject(t.projectId);
+  document.getElementById('board-title').textContent = proj ? proj.name : 'All Tickets';
+  // static view items (All/Blocked/Critical) keep their class unless cleared;
+  // renderSidebar only manages project items
+  document.querySelectorAll('.project-item').forEach(el => el.classList.remove('active'));
+  selectTicket(id);   // board + detail panel
+  renderSidebar();    // active highlight follows state.selectedProject
+  requestAnimationFrame(() => {
+    for (const c of document.querySelectorAll('.ticket')) {
+      const idEl = c.querySelector('.ticket-id');
+      if (idEl && idEl.textContent === id) {
+        c.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        c.classList.add('search-flash');
+        setTimeout(() => c.classList.remove('search-flash'), 3400);
+        break;
+      }
+    }
+  });
+}
+
 function getFilteredTickets() {
   let tickets = [...state.tickets];
-  
+
+  // Search overrides project/view scoping — cross-project recall is the point.
+  const q = searchQuery.trim().toLowerCase();
+  if (q) {
+    return tickets
+      .filter(t => ticketMatches(t, q))
+      .sort((a, b) => (a.projectId || '').localeCompare(b.projectId || '') || priOrder(a.priority) - priOrder(b.priority));
+  }
+
   if (state.selectedProject !== 'all') {
     tickets = tickets.filter(t => t.projectId === state.selectedProject);
   }
@@ -1423,6 +1603,7 @@ function setStatus(ticketId, newStatus) {
   t.status = newStatus;
   t.log.push({ t: Date.now(), msg: `Status: <strong>${old}</strong> → <strong>${newStatus}</strong>` });
   render();
+  saveState();
 }
 
 function deleteTicket(id) {
@@ -1437,6 +1618,7 @@ function deleteTicket(id) {
   document.getElementById('panel-empty').style.display = '';
   document.getElementById('panel-content').style.display = 'none';
   render();
+  saveState();
 }
 
 // ── FILTERS ──
@@ -1520,6 +1702,7 @@ function createTicket() {
   ['f-title','f-why','f-desc'].forEach(id => document.getElementById(id).value = '');
   
   render();
+  saveState();
   selectTicket(t.id);
 }
 
@@ -1550,6 +1733,7 @@ function createProject() {
   document.getElementById('fp-goal').value = '';
   closeModal('modal-project');
   render();
+  saveState();
 }
 
 // ── STATUS REPORT ──
@@ -1646,7 +1830,46 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open'));
   if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openNewTicket(); }
+  // "/" focuses global search unless already typing somewhere (T-582)
+  if (e.key === '/' && !e.metaKey && !e.ctrlKey && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
+    e.preventDefault();
+    document.getElementById('global-search').focus();
+  }
 });
+
+// ── GLOBAL SEARCH wiring (T-582) ──
+{
+  const searchEl = document.getElementById('global-search');
+  searchEl.addEventListener('input', e => onSearchInput(e.target.value));
+  searchEl.addEventListener('focus', () => {
+    if (searchQuery.trim()) renderSearchResults(searchQuery.trim().toLowerCase());
+  });
+  searchEl.addEventListener('keydown', e => {
+    const rows = document.querySelectorAll('#search-results .search-row');
+    if (e.key === 'Escape') {
+      searchEl.value = '';
+      onSearchInput('');
+      searchEl.blur();
+      e.stopPropagation();
+    } else if (e.key === 'ArrowDown' && rows.length) {
+      e.preventDefault();
+      _searchKbIndex = Math.min(_searchKbIndex + 1, rows.length - 1);
+      rows.forEach((r, i) => r.classList.toggle('kb-focus', i === _searchKbIndex));
+      rows[_searchKbIndex].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'ArrowUp' && rows.length) {
+      e.preventDefault();
+      _searchKbIndex = Math.max(_searchKbIndex - 1, 0);
+      rows.forEach((r, i) => r.classList.toggle('kb-focus', i === _searchKbIndex));
+      rows[_searchKbIndex].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter' && rows.length) {
+      e.preventDefault();
+      jumpToTicket(rows[_searchKbIndex >= 0 ? _searchKbIndex : 0].dataset.tid);
+    }
+  });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.search-wrap')) document.getElementById('search-results').classList.remove('open');
+  });
+}
 
 // ── INIT ──
 (async () => {
