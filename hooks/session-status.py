@@ -57,6 +57,14 @@ def main():
             idle = days_idle(t)
             if idle >= STALE_ACTIVE_DAYS:
                 suffix += f" [idle {idle}d]"
+            if t.get("verifyCmd"):
+                v = t.get("verified")
+                if not v:
+                    suffix += " [unverified]"
+                elif v.get("exit") != 0:
+                    suffix += f" [verify failing: exit {v['exit']}]"
+                else:
+                    suffix += f" [verified {v.get('rev', '?')}]"
             lines.append(f"    {t['id']} [{proj}] {t['title']}{suffix}")
 
     if blocked:

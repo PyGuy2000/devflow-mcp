@@ -18,12 +18,13 @@ The web UI server (`http_api.py`) also refuses to double-launch: it doesn't set 
 
 ## Tools
 
-17 MCP tools organized in tiers:
+18 MCP tools organized in tiers:
 
 ### Daily work (Tier 1)
-- `create_project` — register a project with a name and goal
-- `add_ticket` — create a ticket with title, rationale ("why"), priority, and optional blockers
-- `update_ticket_status` — move tickets between backlog, active, blocked, done; a `done` transition reports any blocked tickets whose blockers are now all resolved
+- `create_project` — register a project with a name, goal, and optional `repo_path`
+- `add_ticket` — create a ticket with title, rationale ("why"), priority, optional blockers, and an optional `verify_cmd`
+- `update_ticket_status` — move tickets between backlog, active, blocked, done; a `done` transition reports any blocked tickets whose blockers are now all resolved, and is refused if the ticket's `verify_cmd` has not passed on the current revision
+- `verify_ticket` — run a ticket's `verify_cmd` and record the exit code, output tail, and git revision as proof on the ticket
 - `list_tickets` — query tickets with project/status/priority filters
 - `get_ticket` — full context for one ticket: fields, complete work log, dependencies resolved to titles/statuses
 - `log_work` — append a timestamped work note to a ticket's log (progress, findings, session-handoff breadcrumbs)
@@ -72,6 +73,52 @@ Every ticket requires a `why` field: why the work exists and what it unblocks. T
   "blocksTickets": ["T-043"]
 }
 ```
+
+## Verification gate
+
+A ticket can carry a `verify_cmd`: one shell command that proves the work is finished.
+
+```python
+add_ticket(
+    title="Build ADR-110 governance checks",
+    why="ADR-110 ships no check. The rule decays until one exists.",
+    project="platform_kernel_os",
+    verify_cmd="pytest tests/test_governance_checks.py -q",
+)
+```
+
+`verify_ticket` runs that command in the project's `repo_path` and writes the result onto the ticket:
+
+```json
+"verified": {
+  "cmd": "pytest tests/test_governance_checks.py -q",
+  "exit": 0,
+  "rev": "b8e0d41",
+  "tail": "3 passed in 1.4s",
+  "durationSec": 1.5
+}
+```
+
+`update_ticket_status(..., "done")` then requires three things: a stored result, exit 0, and a `rev` equal to the current `git rev-parse --short HEAD`. That third condition is the one that earns its keep. Tests pass, the agent makes one more cleanup commit, and the proof no longer applies:
+
+```
+{"error": "T-557 proof is stale: it passed on a3f91c2, HEAD is now b8e0d41.",
+ "hint": "Re-run verify_ticket(\"T-557\")."}
+```
+
+Tickets with no `verify_cmd` behave exactly as before. The field is opt-in per ticket, there is no migration, and old tickets keep closing on a plain status change.
+
+When a check genuinely cannot run, close the ticket with a reason:
+
+```python
+update_ticket_status("T-557", "done", waiver="checker needs a live k8s context, ran manually")
+```
+
+The transition succeeds and the ticket log keeps the sentence `WAIVED verification: checker needs a live k8s context, ran manually` permanently. Without an escape hatch, a gate that blocks one legitimate close gets switched off for every ticket.
+
+Two limits worth knowing. If the agent writes both the ticket and its `verify_cmd`, it can pick a weak command; `verify_cmd: "true"` passes. Storing the command on the ticket makes a lazy one visible on the board, which is the extent of the protection. And a project with no `repoPath`, or a `repoPath` that is not a git checkout, records `rev: null` and skips the staleness check while still requiring exit 0.
+
+`get_status_report` lists gated tickets with no green run under `needs_verification`, and the session-start hook marks them `[unverified]`, `[verify failing: exit N]`, or `[verified b8e0d41]`.
 
 ## ADR scanning
 
@@ -173,7 +220,8 @@ Configure in `config.json`:
   "default_classification": "personal",
   "stale_active_days": 14,
   "wip_limit": 10,
-  "max_timer_hours": 8.0
+  "max_timer_hours": 8.0,
+  "verify_timeout_sec": 600
 }
 ```
 
@@ -221,7 +269,7 @@ Periodically:
 
 ```
 devflow-mcp/
-  server.py                  # MCP server (17 tools, ~1,500 lines)
+  server.py                  # MCP server (18 tools, ~1,700 lines)
   state_store.py             # Lock + atomic-replace state persistence
   github_activity_sync.py    # Optional: cron script, syncs GitHub commits/PRs into ProjectHub
   http_api.py                # Optional web UI server
@@ -231,6 +279,7 @@ devflow-mcp/
   test_concurrency.py        # Exercises the lock under concurrent writers
   test_stale_write_guard.py  # Exercises the HTTP API's stale-snapshot rejection (409)
   test_tools.py               # get_ticket, log_work, stale-active/WIP/ready-to-unblock
+  test_verifier.py           # verify_ticket, the done gate, revision staleness, waivers
   hooks/
     session-status.py        # Session-start hook
 ```
@@ -241,6 +290,7 @@ Each test file is a standalone script, not a pytest suite — running them toget
 
 ```bash
 python3 test_tools.py
+python3 test_verifier.py
 python3 test_stale_write_guard.py
 python3 test_concurrency.py
 ```

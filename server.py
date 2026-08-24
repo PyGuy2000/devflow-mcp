@@ -9,6 +9,7 @@ side-effects to a ProjectHub SQLite database for portfolio tracking.
 import json
 import os
 import re
+import subprocess
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -40,6 +41,7 @@ DEFAULT_CONFIG = {
     "stale_active_days": 14,
     "wip_limit": 10,
     "max_timer_hours": 8.0,
+    "verify_timeout_sec": 600,
 }
 
 
@@ -88,7 +90,9 @@ mcp = FastMCP("devflow")
 
 
 @mcp.tool()
-def create_project(name: str, goal: str, color: str = "#4f7cff") -> dict:
+def create_project(
+    name: str, goal: str, color: str = "#4f7cff", repo_path: str = ""
+) -> dict:
     """
     Register a new project in DevFlow.
 
@@ -96,6 +100,9 @@ def create_project(name: str, goal: str, color: str = "#4f7cff") -> dict:
         name: Project name (short, snake_case preferred).
         goal: What this project is ultimately for.
         color: Hex color for the project badge. Defaults to blue.
+        repo_path: Absolute path to the project's checkout. Required only if
+                   this project's tickets use verify_cmd — it's the working
+                   directory the verifier runs in.
     """
 
     def _apply(state):
@@ -109,6 +116,7 @@ def create_project(name: str, goal: str, color: str = "#4f7cff") -> dict:
             "name": name,
             "goal": goal,
             "color": color,
+            "repoPath": repo_path,
         }
         state["projects"] = [*state["projects"], project]
         return {"success": True, "project": project}
@@ -133,6 +141,7 @@ def add_ticket(
     blocked_by: Optional[list[str]] = None,
     status: str = "backlog",
     desc: str = "",
+    verify_cmd: str = "",
 ) -> dict:
     """
     Add a ticket to a project.
@@ -145,6 +154,10 @@ def add_ticket(
         blocked_by: List of ticket IDs (e.g. ["T-001", "T-003"]) that block this ticket.
         status: Initial status: backlog, active, blocked, or done. Defaults to backlog.
         desc: Technical details and implementation approach (optional).
+        verify_cmd: Shell command that proves this ticket is done, e.g.
+                    "pytest tests/test_foo.py -q". If set, the ticket cannot
+                    move to 'done' until verify_ticket() runs it to exit 0 on
+                    the current HEAD. Prefer a command the human chose.
     """
     captured = {}
 
@@ -175,6 +188,8 @@ def add_ticket(
             "blockedBy": bl,
             "blocksTickets": [],
             "created": now_ms,
+            "verifyCmd": verify_cmd,
+            "verified": None,
             "log": [{"t": now_ms, "msg": "Ticket created"}],
         }
 
@@ -199,16 +214,34 @@ def add_ticket(
 
 
 @mcp.tool()
-def update_ticket_status(ticket_id: str, new_status: str) -> dict:
+def update_ticket_status(
+    ticket_id: str, new_status: str, waiver: Optional[str] = None
+) -> dict:
     """
     Move a ticket between statuses.
+
+    A ticket that carries a verify_cmd cannot reach 'done' until verify_ticket()
+    has run that command to exit 0 against the current HEAD. Proof from an
+    earlier revision is refused — the "one last cleanup commit" is exactly the
+    change that breaks a suite everyone stopped watching.
 
     Args:
         ticket_id: The ticket ID (e.g. "T-001").
         new_status: Target status: backlog, active, blocked, or done.
+        waiver: Human reason for closing without passing verification, e.g.
+                "checker needs a live k8s context, ran manually". Recorded on
+                the ticket permanently. Only supply this when the human asked
+                for it — an agent waiving its own gate defeats the point.
     """
     if new_status not in ("backlog", "active", "blocked", "done"):
         return {"error": f"Invalid status '{new_status}'. Use backlog/active/blocked/done."}
+
+    # The gate shells out to git for the current HEAD, so it runs before the
+    # lock is taken — never hold the state lock across a subprocess.
+    if new_status == "done" and not waiver:
+        gate = _verification_gate(ticket_id)
+        if gate:
+            return gate
 
     captured = {}
 
@@ -227,7 +260,10 @@ def update_ticket_status(ticket_id: str, new_status: str) -> dict:
             abort({"info": f"Ticket {ticket_id} is already '{new_status}'.", "ticket": ticket})
 
         now_ms = int(time.time() * 1000)
-        log_entry = {"t": now_ms, "msg": f"Status: {old_status} → {new_status}"}
+        msg = f"Status: {old_status} → {new_status}"
+        if waiver and new_status == "done" and ticket.get("verifyCmd"):
+            msg += f" — WAIVED verification: {waiver}"
+        log_entry = {"t": now_ms, "msg": msg}
 
         updated_ticket = {
             **ticket,
@@ -255,6 +291,8 @@ def update_ticket_status(ticket_id: str, new_status: str) -> dict:
             "ticket": updated_ticket,
             "transition": f"{old_status} → {new_status}",
         }
+        if waiver and new_status == "done" and ticket.get("verifyCmd"):
+            result["waived"] = waiver
         if ready:
             result["ready_to_unblock"] = ready
             result["hint"] = "All blockers resolved for these tickets — consider moving them to backlog or active."
@@ -328,6 +366,7 @@ def edit_ticket(
     desc: Optional[str] = None,
     priority: Optional[str] = None,
     project: Optional[str] = None,
+    verify_cmd: Optional[str] = None,
 ) -> dict:
     """
     Edit a ticket's fields. Only provided fields are updated.
@@ -339,6 +378,9 @@ def edit_ticket(
         desc: New technical description.
         priority: New priority (critical, high, medium, low).
         project: Move ticket to a different project (name or ID).
+        verify_cmd: New verification command. Pass "" to remove the gate.
+                    Changing it clears any stored proof — proof belongs to the
+                    command that produced it.
     """
     if priority and priority not in ("critical", "high", "medium", "low"):
         return {"error": f"Invalid priority '{priority}'."}
@@ -362,6 +404,9 @@ def edit_ticket(
             updates["desc"] = desc
         if priority is not None:
             updates["priority"] = priority
+        if verify_cmd is not None and verify_cmd != ticket.get("verifyCmd", ""):
+            updates["verifyCmd"] = verify_cmd
+            updates["verified"] = None
 
         if project is not None:
             proj = _resolve_project(state, project)
@@ -462,6 +507,106 @@ def log_work(ticket_id: str, note: str) -> dict:
         }
 
     return mutate_state(_apply)
+
+
+@mcp.tool()
+def verify_ticket(ticket_id: str) -> dict:
+    """
+    Run a ticket's verify_cmd and record the outcome as proof on the ticket.
+
+    Stores exit code, output tail, and the git revision the run happened on.
+    update_ticket_status(..., "done") consults that record: it requires exit 0
+    on the *current* HEAD, so a later commit invalidates the proof and the
+    command has to run again.
+
+    Args:
+        ticket_id: The ticket ID (e.g. "T-001").
+    """
+    state = load_state()
+    ticket = next((t for t in state["tickets"] if t["id"] == ticket_id), None)
+    if not ticket:
+        return {"error": f"Ticket '{ticket_id}' not found."}
+
+    cmd = (ticket.get("verifyCmd") or "").strip()
+    if not cmd:
+        return {
+            "error": f"{ticket_id} has no verify_cmd — nothing to run.",
+            "hint": f'Set one: edit_ticket("{ticket_id}", verify_cmd="pytest tests/... -q")',
+        }
+
+    proj = _find_project_by_id(state, ticket["projectId"])
+    repo = (proj or {}).get("repoPath") or ""
+    if not repo or not Path(repo).is_dir():
+        return {
+            "error": (
+                f"Project '{_project_name_by_id(state, ticket['projectId'])}' has no "
+                f"usable repoPath (got {repo!r}) — the verifier needs a working directory."
+            ),
+            "hint": "Set it in devflow_state.json, or recreate the project with repo_path=...",
+        }
+
+    timeout = load_config().get("verify_timeout_sec", 600)
+    rev = _git_rev(repo)
+    started = time.time()
+
+    # shell=True is deliberate: verify_cmd is an author-written command line
+    # ("pytest -q && ruff check ."), not user input, and this server is a
+    # local single-user tool whose caller already has shell access.
+    try:
+        proc = subprocess.run(
+            cmd, shell=True, cwd=repo, capture_output=True, text=True, timeout=timeout
+        )
+        exit_code = proc.returncode
+        output = (proc.stdout or "") + (proc.stderr or "")
+    except subprocess.TimeoutExpired:
+        exit_code = 124
+        output = f"verify_cmd exceeded verify_timeout_sec ({timeout}s) and was killed."
+    except OSError as e:
+        exit_code = 127
+        output = f"could not execute verify_cmd: {e}"
+
+    record = {
+        "t": int(time.time() * 1000),
+        "cmd": cmd,
+        "exit": exit_code,
+        "rev": rev,
+        "tail": _output_tail(output),
+        "durationSec": round(time.time() - started, 1),
+    }
+
+    def _apply(st):
+        t = next((x for x in st["tickets"] if x["id"] == ticket_id), None)
+        if not t:
+            abort({"error": f"Ticket '{ticket_id}' disappeared mid-verification."})
+        verdict = "passed" if exit_code == 0 else f"FAILED (exit {exit_code})"
+        entry = {
+            "t": record["t"],
+            "msg": f"Verification {verdict} on {rev or 'unknown rev'}: {record['tail'].splitlines()[-1] if record['tail'] else cmd}",
+        }
+        updated = {**t, "verified": record, "log": [*t["log"], entry]}
+        st["tickets"] = [updated if x["id"] == ticket_id else x for x in st["tickets"]]
+        return {"success": True}
+
+    stored = mutate_state(_apply)
+    if not stored.get("success"):
+        return stored
+
+    result = {
+        "ticket_id": ticket_id,
+        "passed": exit_code == 0,
+        "exit": exit_code,
+        "rev": rev,
+        "cmd": cmd,
+        "duration_sec": record["durationSec"],
+        "tail": record["tail"],
+    }
+    result["hint"] = (
+        f'Proof recorded. update_ticket_status("{ticket_id}", "done") will now pass '
+        f"while HEAD is {rev}."
+        if exit_code == 0
+        else "Verification failed — fix the work, then run verify_ticket again."
+    )
+    return result
 
 
 @mcp.tool()
@@ -860,6 +1005,24 @@ def get_status_report() -> dict:
         for t in _ready_to_unblock(state)
     ]
 
+    # Gated tickets with no green run yet. Deliberately does not shell out to
+    # git for staleness — this report runs at every session start, and a stale
+    # revision is caught at the 'done' transition anyway.
+    needs_verification = []
+    for t in state["tickets"]:
+        if t["status"] not in ("active", "blocked") or not t.get("verifyCmd"):
+            continue
+        v = t.get("verified")
+        if v and v.get("exit") == 0:
+            continue
+        needs_verification.append({
+            "id": t["id"],
+            "title": t["title"],
+            "project": _project_name_by_id(state, t["projectId"]),
+            "verify_cmd": t["verifyCmd"],
+            "last_exit": v.get("exit") if v else None,
+        })
+
     # Portfolio health (from bridge if available)
     portfolio_alerts = []
     bridge = get_bridge()
@@ -873,6 +1036,7 @@ def get_status_report() -> dict:
         "active": active,
         "ready_to_unblock": ready_to_unblock,
         "stale_active": stale_active,
+        "needs_verification": needs_verification,
         "wip_warning": wip_warning,
         "dependency_chains": chains,
         "portfolio_alerts": portfolio_alerts,
@@ -1385,6 +1549,87 @@ def _extract_outstanding_work(adr: dict) -> str:
 
 
 # ── Helper Functions ───────────────────────────────────────────────────────────
+
+
+def _git_rev(repo: str) -> Optional[str]:
+    """Short HEAD sha for `repo`, or None if it isn't a git checkout.
+
+    None is a valid answer, not an error: a project can be a plain directory.
+    Callers must degrade to "no staleness check" rather than blocking on it.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+_TAIL_LINES = 20
+_TAIL_CHARS = 2000
+
+
+def _output_tail(output: str) -> str:
+    """Last few lines of a verify run — enough to see the failure, not the suite."""
+    lines = [ln for ln in (output or "").splitlines() if ln.strip()]
+    tail = "\n".join(lines[-_TAIL_LINES:])
+    if len(tail) > _TAIL_CHARS:
+        tail = "…" + tail[-_TAIL_CHARS:]
+    return tail
+
+
+def _verification_gate(ticket_id: str) -> Optional[dict]:
+    """Refuse a 'done' transition when the ticket's verify_cmd hasn't earned it.
+
+    Returns an error dict to block with, or None to allow. Shells out to git,
+    so callers must invoke it OUTSIDE the state lock.
+    """
+    state = load_state()
+    ticket = next((t for t in state["tickets"] if t["id"] == ticket_id), None)
+    if not ticket:
+        return None  # let the mutator raise the canonical "not found"
+
+    cmd = (ticket.get("verifyCmd") or "").strip()
+    if not cmd:
+        return None  # no gate declared — unchanged behaviour
+
+    waive = f'Or close it anyway: update_ticket_status("{ticket_id}", "done", waiver="<reason>")'
+    v = ticket.get("verified")
+    if not v:
+        return {
+            "error": f"{ticket_id} needs verification before it can be done.",
+            "verify_cmd": cmd,
+            "hint": f'Run verify_ticket("{ticket_id}") first. {waive}',
+        }
+
+    if v.get("exit") != 0:
+        return {
+            "error": f"{ticket_id} last failed verification (exit {v.get('exit')}).",
+            "verify_cmd": cmd,
+            "tail": v.get("tail", ""),
+            "hint": f"Fix the work, then run verify_ticket. {waive}",
+        }
+
+    proj = _find_project_by_id(state, ticket["projectId"])
+    repo = (proj or {}).get("repoPath") or ""
+    current = _git_rev(repo) if repo and Path(repo).is_dir() else None
+    if current and v.get("rev") and v["rev"] != current:
+        return {
+            "error": (
+                f"{ticket_id} proof is stale: it passed on {v['rev']}, HEAD is now {current}."
+            ),
+            "verify_cmd": cmd,
+            "hint": f'Re-run verify_ticket("{ticket_id}"). {waive}',
+        }
+
+    return None
 
 
 def _resolve_project(state: dict, identifier: str) -> Optional[dict]:
