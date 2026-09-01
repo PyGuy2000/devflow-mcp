@@ -30,6 +30,15 @@ from state_store import (
     read_state,
 )
 
+# ADR text parsing lives in adr_parse.py so scan_project (below) and the ADR
+# index builder (adr_index.py) share one definition of "what an ADR is". When
+# they were separate copies the Decisions view under-reported silently.
+from adr_parse import (
+    _load_decisions,
+    _parse_adr_sections,
+    _parse_adrs,
+)
+
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1040,7 +1049,39 @@ def get_status_report() -> dict:
         "wip_warning": wip_warning,
         "dependency_chains": chains,
         "portfolio_alerts": portfolio_alerts,
+        "adr_health": _adr_health_summary(),
     }
+
+
+def _adr_health_summary() -> dict:
+    """Decision-side health, folded into the status report.
+
+    Tickets answer "what am I doing"; ADRs answer "what did I decide and did
+    it ever get done". A proposal sitting untouched for months, or an ADR
+    pointing at a deleted ticket, is invisible from the ticket board alone.
+    Degrades quietly when the index has not been built.
+    """
+    try:
+        from adr_index import load_index
+        index = load_index()
+        if not index:
+            return {"available": False, "reason": "index not built — run refresh_adr_index()"}
+        h = index["health"]
+        return {
+            "available": True,
+            "generated": index.get("generated", ""),
+            "total_adrs": index["counts"]["adrs"],
+            "adrs_without_tickets": len(h["adrsWithoutTickets"]),
+            "stale_proposals": h["staleProposals"][:5],
+            "orphan_ticket_refs": h["orphanTicketRefs"][:5],
+            "number_collisions": len(h["numberCollisions"]),
+            "repos_without_devflow_project": [
+                r["repo"] for r in h["reposWithoutDevflowProject"]
+            ],
+            "unconfirmed_categories": h["unconfirmedCategories"],
+        }
+    except Exception as exc:
+        return {"available": False, "reason": str(exc)}
 
 
 # ── Tier 4: Manifest Ingestion ─────────────────────────────────────────────────
@@ -1342,104 +1383,6 @@ def scan_project(
         "created_tickets": created,
         "already_tracked_details": already_tracked,
     }
-
-
-def _load_decisions(project_dir: Path) -> Optional[tuple[str, str]]:
-    """Load ADR text for a project, split layout first, legacy single file second.
-
-    Split layout is ``docs/project_notes/decisions/ADR-*.md`` (one ADR per
-    file). Legacy is a single ``docs/project_notes/decisions.md``. When a repo
-    has migrated, decisions.md remains as a generated index whose rows are
-    table cells, not ``## ADR-`` headings, so reading it would yield zero ADRs
-    and silently report that nothing needs a ticket. Preferring the directory
-    is what stops that.
-
-    Returns ``(content, source_description)``, or None when neither exists.
-    """
-    notes_dir = project_dir / "docs" / "project_notes"
-    split_dir = notes_dir / "decisions"
-    single_file = notes_dir / "decisions.md"
-
-    if split_dir.is_dir():
-        def _adr_sort_key(p: Path) -> tuple[int, str]:
-            m = re.match(r"ADR-(\d+)", p.name)
-            return (int(m.group(1)) if m else 10**9, p.name)
-
-        files = sorted(split_dir.glob("ADR-*.md"), key=_adr_sort_key)
-        if files:
-            content = "\n\n".join(
-                f.read_text(encoding="utf-8") for f in files
-            )
-            return content, f"{split_dir} ({len(files)} files)"
-
-    if single_file.exists():
-        return single_file.read_text(encoding="utf-8"), str(single_file)
-
-    return None
-
-
-def _parse_adrs(content: str) -> list[dict]:
-    """Parse ADR entries from decisions text (single file or concatenated split files)."""
-    adr_pattern = re.compile(
-        r"^#{2,3} (ADR-\d+|ADR-XXX): (.+?)(?:\s*\((\d{4}-\d{2}-\d{2})\))?\s*$",
-        re.MULTILINE,
-    )
-
-    matches = list(adr_pattern.finditer(content))
-    adrs = []
-
-    for i, match in enumerate(matches):
-        adr_id = match.group(1)
-        title = match.group(2).strip()
-        date = match.group(3) or ""
-
-        # Skip the template entry
-        if adr_id == "ADR-XXX":
-            continue
-
-        # Extract body until next ADR or end of file
-        start = match.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
-        body = content[start:end].strip()
-
-        # Parse sections
-        sections = _parse_adr_sections(body)
-
-        # Fall back to **Date**: field if header didn't have a date
-        if not date and "date" in sections:
-            date_match = re.search(r"\d{4}-\d{2}-\d{2}", sections["date"])
-            if date_match:
-                date = date_match.group(0)
-
-        adrs.append({
-            "id": adr_id,
-            "title": title,
-            "date": date,
-            "body": body,
-            "sections": sections,
-        })
-
-    return adrs
-
-
-def _parse_adr_sections(body: str) -> dict[str, str]:
-    """Split an ADR body into named sections. Handles both **Bold:** and ### Header styles."""
-    # Match **Bold:** markers OR ### subsection headers
-    section_pattern = re.compile(
-        r"(?:^\*\*(.+?):?\*\*\s*$|^### (.+?)\s*$)",
-        re.MULTILINE,
-    )
-    matches = list(section_pattern.finditer(body))
-    sections = {}
-
-    for i, match in enumerate(matches):
-        # group(1) is **Bold**, group(2) is ### Header
-        name = (match.group(1) or match.group(2)).strip().rstrip(":")
-        start = match.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
-        sections[name.lower()] = body[start:end].strip()
-
-    return sections
 
 
 def _has_outstanding_work(adr: dict) -> bool:
@@ -1769,6 +1712,166 @@ def _bridge_ticket_blocked(ticket: dict, proj: Optional[dict], state: dict) -> N
                     source_project=proj["name"],
                     target_project=blocker_proj["name"],
                 )
+
+
+# ── ADR Index ──────────────────────────────────────────────────────────────────
+#
+# Read-only view over every repo's decisions.md. The index itself is built by
+# adr_index.py and cached in adr_index.json; nothing here touches ticket state.
+
+
+@mcp.tool()
+def list_adrs(
+    project: Optional[str] = None,
+    layer: Optional[str] = None,
+    domain: Optional[str] = None,
+    status: Optional[str] = None,
+    has_ticket: Optional[bool] = None,
+    limit: int = 60,
+) -> dict:
+    """
+    List Architecture Decision Records across all indexed repos, optionally filtered.
+
+    ADR numbers repeat across projects (every repo restarts at ADR-001), so each
+    record carries a collision-proof `uid` of the form "<project>:ADR-NNN". Use
+    the uid, not the bare ADR number, when referring to one.
+
+    Args:
+        project: Filter by DevFlow project name/ID or repo directory name.
+        layer: Filter by layer (ui, chatbot, agentic, etl, datasets,
+            plugins-engines, infra, security, ops).
+        domain: Filter by domain (homelab, platform-kernel, kbvault,
+            clutch-openclaw, alberta-market, nerc, pediatrica, consulting,
+            personal-automation, harness, modelling).
+        status: Filter by status (accepted, implemented, proposed, deferred,
+            superseded, rejected).
+        has_ticket: True for ADRs with linked DevFlow tickets, False for those without.
+        limit: Maximum records to return (default 60).
+    """
+    from adr_index import load_index
+
+    index = load_index()
+    if not index:
+        return {"error": "ADR index not built. Run refresh_adr_index() first.", "adrs": []}
+
+    adrs = index["adrs"]
+
+    if project:
+        needle = re.sub(r"[^a-z0-9]", "", project.lower())
+        adrs = [
+            a for a in adrs
+            if needle in re.sub(r"[^a-z0-9]", "", a["project"].lower())
+            or needle in re.sub(r"[^a-z0-9]", "", a["repoName"].lower())
+        ]
+    if layer:
+        adrs = [a for a in adrs if a["layer"] == layer]
+    if domain:
+        adrs = [a for a in adrs if a["domain"] == domain]
+    if status:
+        adrs = [a for a in adrs if a["status"] == status]
+    if has_ticket is not None:
+        adrs = [a for a in adrs if bool(a["tickets"]) == has_ticket]
+
+    total = len(adrs)
+    # Newest first; undated ADRs sort last rather than leading the list.
+    adrs = sorted(adrs, key=lambda a: (a["date"] or "0000", a["adrNum"]), reverse=True)
+
+    # Strip section bodies — they are large and the caller can fetch one ADR in
+    # full from the index when it actually needs the prose.
+    slim = [
+        {k: v for k, v in a.items() if k != "sections"}
+        for a in adrs[:limit]
+    ]
+
+    return {
+        "count": total,
+        "returned": len(slim),
+        "generated": index.get("generated", ""),
+        "adrs": slim,
+    }
+
+
+@mcp.tool()
+def refresh_adr_index() -> dict:
+    """
+    Rebuild the ADR index by re-reading every repo's decisions.md.
+
+    Run this after writing a new ADR. Reads only; never modifies ticket state.
+    Returns per-repo counts plus the health report (ADRs with no ticket, stale
+    proposals, orphan ticket references, and ADR-number collisions).
+    """
+    from adr_index import build, write_index
+
+    index = build(verbose=False)
+    path = write_index(index)
+
+    health = index["health"]
+    return {
+        "success": True,
+        "path": str(path),
+        "generated": index["generated"],
+        "counts": index["counts"],
+        "health_summary": {
+            "adrs_without_tickets": len(health["adrsWithoutTickets"]),
+            "stale_proposals": len(health["staleProposals"]),
+            "orphan_ticket_refs": len(health["orphanTicketRefs"]),
+            "number_collisions": len(health["numberCollisions"]),
+            "repos_without_devflow_project": len(health["reposWithoutDevflowProject"]),
+            "unconfirmed_categories": health["unconfirmedCategories"],
+        },
+    }
+
+
+@mcp.tool()
+def get_adr(uid: str) -> dict:
+    """
+    Get one ADR in full, including its section prose, edges, and linked tickets.
+
+    Args:
+        uid: The ADR's unique id, e.g. "proj-homelab_gitops:ADR-057". A bare
+            "ADR-057" is accepted but will error if it is ambiguous across repos.
+    """
+    from adr_index import load_index
+
+    index = load_index()
+    if not index:
+        return {"error": "ADR index not built. Run refresh_adr_index() first."}
+
+    matches = [a for a in index["adrs"] if a["uid"] == uid]
+    if not matches:
+        matches = [a for a in index["adrs"] if a["adrId"] == uid]
+        if len(matches) > 1:
+            return {
+                "error": f"'{uid}' is ambiguous across {len(matches)} repos. Use a full uid.",
+                "candidates": [
+                    {"uid": m["uid"], "repo": m["repoName"], "title": m["title"]}
+                    for m in matches
+                ],
+            }
+    if not matches:
+        return {"error": f"ADR '{uid}' not found."}
+
+    adr = dict(matches[0])
+
+    # Resolve edge targets and ticket states so the caller gets one useful
+    # answer instead of a list of ids to look up separately.
+    by_uid = {a["uid"]: a for a in index["adrs"]}
+    adr["edges"] = [
+        {
+            **e,
+            "targetTitle": by_uid[e["target"]]["title"] if e["target"] in by_uid else None,
+        }
+        for e in adr["edges"]
+    ]
+
+    state = load_state()
+    tickets = {t["id"]: t for t in state["tickets"]}
+    adr["ticketDetails"] = [
+        {"id": tid, "title": tickets[tid]["title"], "status": tickets[tid]["status"]}
+        for tid in adr["tickets"] if tid in tickets
+    ]
+
+    return adr
 
 
 # ── Entry Point ────────────────────────────────────────────────────────────────

@@ -8,7 +8,6 @@ Serves on: http://localhost:7117
 
 import json
 import os
-import sys
 import time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -50,9 +49,9 @@ def _resolve_project(state: dict, identifier: str):
 def create_ticket(body: dict) -> tuple[dict, int]:
     """Create a ticket from an HTTP payload. Returns (response_json, status).
 
-    Browser-facing twin of server.py's add_ticket — lets an external, trusted
-    tool (e.g. another dashboard) create tickets over HTTP instead of MCP.
-    No blocked_by support — dependencies stay an MCP/agent concern.
+    Browser-facing twin of server.py's add_ticket (T-106 Phase 3: KBVault's
+    admin UI creates tickets from endorsed recommendations). No blocked_by
+    support — dependencies stay an MCP/agent concern.
     """
     title = (body.get("title") or "").strip()
     why = (body.get("why") or "").strip()
@@ -137,6 +136,25 @@ class DevFlowHandler(BaseHTTPRequestHandler):
             state = load_state()
             self._json_response(state)
 
+        elif self.path == "/api/adrs":
+            # The ADR index backing the Decisions view. A derived cache built
+            # from every repo's decisions.md — read-only, never part of state.
+            # Same no-store reasoning as the HTML route (T-582): a browser
+            # holding a stale index would show decisions that moved.
+            from adr_index import load_index
+            index = load_index()
+            if not index:
+                self._json_response(
+                    {"error": "adr_index.json not built — run adr_index.py"}, 404
+                )
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self._cors()
+            self.end_headers()
+            self.wfile.write(json.dumps(index).encode())
+
         elif self.path == "/api/health":
             self._json_response({"status": "ok", "state_file": str(STATE_FILE)})
 
@@ -198,9 +216,9 @@ class DevFlowHandler(BaseHTTPRequestHandler):
                 self._json_response(result)
 
         elif self.path == "/api/ticket":
-            # Create a ticket from an external tool over HTTP.
+            # Create a ticket (T-106 Phase 3: KBVault endorsement → ticket).
             # Token-gated: this server is CORS-open, so the write must carry
-            # the shared secret only a trusted caller holds.
+            # the shared secret only trusted pages (KBVault admin) hold.
             import hmac
             token = _api_token()
             if not token:
@@ -214,6 +232,33 @@ class DevFlowHandler(BaseHTTPRequestHandler):
                 return
             data, status_code = create_ticket(body)
             self._json_response(data, status_code)
+
+        elif self.path == "/api/adrs/refresh":
+            # Rebuild the ADR index from disk. Token-gated like /api/ticket:
+            # the server is CORS-open, and this walks 34 repos, so it must not
+            # be triggerable by any page that happens to be open.
+            import hmac
+            token = _api_token()
+            if not token:
+                self._json_response(
+                    {"error": "refresh disabled (no api_token in config.json)"}, 403
+                )
+                return
+            if not hmac.compare_digest(self.headers.get("X-DevFlow-Token", ""), token):
+                self._json_response({"error": "invalid or missing token"}, 401)
+                return
+            try:
+                from adr_index import build, write_index
+                index = build(verbose=False)
+                write_index(index)
+            except Exception as exc:  # surface the reason, don't 500 blindly
+                self._json_response({"error": f"index build failed: {exc}"}, 500)
+                return
+            self._json_response({
+                "success": True,
+                "counts": index["counts"],
+                "generated": index["generated"],
+            })
 
         elif self.path == "/api/ticket/status":
             # Update a single ticket's status
@@ -257,28 +302,12 @@ class DevFlowHandler(BaseHTTPRequestHandler):
         pass
 
 
-class _SingleInstanceServer(ThreadingHTTPServer):
-    """No SO_REUSEADDR: a duplicate launch must fail the bind loudly and
-    immediately, never silently share the port with the instance already
-    running. This is the only thing that runs before the bind — no state
-    file is touched until a request actually arrives."""
-    allow_reuse_address = False
-
-
 def main():
     port = 7117
     # Threading: a single browser keep-alive connection wedged the old
     # single-threaded HTTPServer — every later request (and the kanban itself)
     # hung behind it (T-582 incident, 2026-08-07).
-    try:
-        server = _SingleInstanceServer(("127.0.0.1", port), DevFlowHandler)
-    except OSError as exc:
-        print(
-            f"[DevFlow HTTP] Could not bind port {port} — is another "
-            f"instance already running? ({exc})",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    server = ThreadingHTTPServer(("127.0.0.1", port), DevFlowHandler)
     print(f"[DevFlow HTTP] Serving on http://localhost:{port}")
     print(f"[DevFlow HTTP] State file: {STATE_FILE}")
     try:

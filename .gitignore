@@ -24,3 +24,7 @@ backups/
 
 # Local override (optional)
 config.local.json
+.gitnexus
+
+# Derived ADR cache — rebuild with adr_index.py, never commit
+adr_index.json
