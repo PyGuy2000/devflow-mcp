@@ -268,6 +268,218 @@
     align-items: start;
   }
 
+  /* ── Decisions view (ADR map) ───────────────────────────────────────────
+     Layer x Domain grid. Layers are rows because there are few of them and
+     they are a fixed vocabulary; domains are columns because they grow. */
+
+  #adr-view { display: none; }
+
+  .adr-toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  .adr-select, .adr-search {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px 9px;
+    font-size: 11px;
+    font-family: var(--sans);
+  }
+  .adr-search { min-width: 200px; }
+  .adr-select:focus, .adr-search:focus { outline: none; border-color: var(--accent); }
+
+  .adr-health {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .adr-health-pill {
+    font-size: 10px;
+    font-family: var(--mono);
+    padding: 4px 8px;
+    border-radius: 20px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .adr-health-pill:hover { border-color: var(--border-bright); color: var(--text); }
+  .adr-health-pill.warn { color: var(--amber); border-color: rgba(245,166,35,0.35); }
+
+  .adr-grid-scroll { overflow-x: auto; padding-bottom: 8px; }
+
+  .adr-grid {
+    display: grid;
+    gap: 10px;
+    align-items: start;
+  }
+  .adr-col-head, .adr-row-head {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    padding: 6px 4px;
+  }
+  .adr-col-head {
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 3;
+  }
+  .adr-row-head {
+    position: sticky;
+    left: 0;
+    background: var(--bg);
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 120px;
+  }
+  .adr-row-head .lc { width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
+
+  .adr-cell {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 5px;
+    min-width: 158px;
+    min-height: 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .adr-cell.empty { background: transparent; border-style: dashed; opacity: 0.35; }
+
+  .adr-chip {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--text-muted);
+    border-radius: 5px;
+    padding: 6px 7px;
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .adr-chip:hover { background: var(--surface3); border-color: var(--border-bright); }
+  .adr-chip.selected { background: var(--surface3); border-color: var(--accent); }
+  .adr-chip-top {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 3px;
+  }
+  .adr-chip-id { font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
+  .adr-chip-title {
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--text);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .adr-chip-tix { display: flex; gap: 3px; flex-wrap: wrap; margin-top: 4px; }
+  .adr-tix {
+    font-family: var(--mono);
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid;
+  }
+  .adr-guess { font-size: 9px; color: var(--text-muted); font-style: italic; }
+
+  .adr-more {
+    font-size: 10px;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 2px 4px;
+    font-family: var(--mono);
+  }
+  .adr-more:hover { color: var(--accent); }
+
+  /* Scoped relationship graph. Drawn as plain SVG: the whole 507-node graph
+     is an unreadable hairball, and a neighbourhood of <40 nodes needs no
+     layout engine. Keeps this file dependency-free. */
+  .adr-graph-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+  }
+  .adr-graph-empty {
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
+    padding: 40px 12px;
+  }
+  .adr-node { cursor: pointer; }
+  .adr-node text { font-family: var(--mono); font-size: 9px; fill: var(--text); }
+  .adr-node:hover circle { stroke: var(--text); }
+
+  .adr-legend {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 10px;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    margin-top: 8px;
+  }
+  .adr-legend span { display: flex; align-items: center; gap: 4px; }
+
+  .adr-sec-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin: 12px 0 5px;
+    font-family: var(--mono);
+  }
+  .adr-sec-body {
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--text-dim);
+    white-space: pre-wrap;
+    max-height: 200px;
+    overflow-y: auto;
+    background: var(--surface2);
+    border-radius: 6px;
+    padding: 8px 9px;
+  }
+  .adr-edge-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+    font-size: 11px;
+  }
+  .adr-edge-kind {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-muted);
+    min-width: 88px;
+  }
+  .adr-edge-ref { color: var(--accent); cursor: pointer; }
+  .adr-edge-ref:hover { text-decoration: underline; }
+  .adr-xproj {
+    font-family: var(--mono);
+    font-size: 8px;
+    color: var(--purple);
+    border: 1px solid rgba(167,139,250,0.35);
+    border-radius: 3px;
+    padding: 0 3px;
+  }
+
   .column {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -797,6 +1009,38 @@
   .pri-medium   { background: var(--accent); }
   .pri-low      { background: var(--text-muted); }
 
+  /* ── GLOBAL SEARCH (T-582) ── */
+  .search-wrap { position: relative; min-width: 300px; }
+  .search-input {
+    width: 100%; font-family: var(--mono); font-size: 12px;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); padding: 7px 12px 7px 30px; border-radius: 5px; outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .search-input:focus { border-color: var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
+  .search-input::placeholder { color: var(--text-muted); }
+  .search-wrap::before { content:'⌕'; position:absolute; left:10px; top:5px; color:var(--text-dim); font-size:15px; pointer-events:none; }
+  .search-results {
+    position:absolute; top: calc(100% + 6px); right:0; width: 480px; max-height: 62vh; overflow-y:auto;
+    background: var(--surface); border:1px solid var(--border-bright); border-radius:8px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.55); z-index:200; display:none;
+  }
+  .search-results.open { display:block; }
+  .search-group-label {
+    font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--text-dim);
+    padding:8px 12px 4px; display:flex; align-items:center; gap:6px;
+    position:sticky; top:0; background:var(--surface); z-index:1;
+  }
+  .search-row { display:flex; align-items:center; gap:8px; padding:7px 12px; cursor:pointer; border-top:1px solid var(--border); }
+  .search-row:hover, .search-row.kb-focus { background: var(--surface2); }
+  .search-row .sr-id { font-size:11px; color:var(--accent); font-weight:700; white-space:nowrap; }
+  .search-row .sr-title { flex:1; font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .search-row .sr-where { font-size:9px; color:var(--text-muted); white-space:nowrap; }
+  .search-row .sr-status { font-size:9px; text-transform:uppercase; letter-spacing:.5px; padding:2px 7px; border-radius:3px; white-space:nowrap; }
+  .search-empty { padding:12px 14px; font-size:11px; color:var(--text-muted); border-top:1px solid var(--border); }
+  @keyframes searchFlash { 0% { box-shadow:0 0 0 2px var(--accent), 0 0 24px var(--accent-glow); } 100% { box-shadow:none; } }
+  .ticket.search-flash { animation: searchFlash 1.6s ease-out 2; }
+
   /* status column colors */
   .col-backlog  .col-indicator { background: var(--text-muted); }
   .col-active   .col-indicator { background: var(--accent); }
@@ -810,6 +1054,10 @@
 <header>
   <div class="logo">Dev<span>Flow</span></div>
   <div class="header-meta">
+    <div class="search-wrap">
+      <input class="search-input" id="global-search" placeholder="Search all projects — title, why, logs…  ( / )" autocomplete="off" />
+      <div class="search-results" id="search-results"></div>
+    </div>
     <div class="stat-pill" id="stat-active"><span class="dot" style="background:var(--accent)"></span><span id="cnt-active">0</span> active</div>
     <div class="stat-pill" id="stat-blocked"><span class="dot" style="background:var(--red)"></span><span id="cnt-blocked">0</span> blocked</div>
     <div class="stat-pill"><span class="dot" style="background:var(--green)"></span><span id="cnt-done">0</span> done</div>
@@ -835,6 +1083,10 @@
       <div class="project-item" onclick="filterView('critical-path', this)">
         <span style="font-size:14px">⚡</span> Critical Path
         <span class="project-count" id="view-critical">0</span>
+      </div>
+      <div class="project-item" onclick="filterView('adrs', this)">
+        <span style="font-size:14px">◈</span> Decisions
+        <span class="project-count" id="view-adrs">0</span>
       </div>
     </div>
     <div class="sidebar-divider"></div>
@@ -891,6 +1143,49 @@
           <div class="column-badge" id="badge-done">0</div>
         </div>
         <div class="column-body" id="body-done"></div>
+      </div>
+    </div>
+
+    <!-- Decisions view: ADR map. Replaces the kanban columns when active. -->
+    <div id="adr-view">
+      <div class="adr-toolbar">
+        <select class="adr-select" id="adr-f-project" onchange="renderAdrView()">
+          <option value="">All projects</option>
+        </select>
+        <select class="adr-select" id="adr-f-status" onchange="renderAdrView()">
+          <option value="">Any status</option>
+          <option value="accepted">Accepted</option>
+          <option value="implemented">Implemented</option>
+          <option value="proposed">Proposed</option>
+          <option value="deferred">Deferred</option>
+          <option value="superseded">Superseded</option>
+          <option value="rejected">Rejected</option>
+        </select>
+        <select class="adr-select" id="adr-f-tickets" onchange="renderAdrView()">
+          <option value="">Any ticket link</option>
+          <option value="yes">Has tickets</option>
+          <option value="no">No tickets</option>
+        </select>
+        <input class="adr-search" id="adr-f-search" placeholder="Filter by title…"
+               oninput="renderAdrView()" autocomplete="off" />
+        <button class="filter-btn active" id="adr-mode-grid" onclick="setAdrMode('grid')">Grid</button>
+        <button class="filter-btn" id="adr-mode-graph" onclick="setAdrMode('graph')">Graph</button>
+        <div class="adr-health" id="adr-health"></div>
+      </div>
+
+      <div class="adr-grid-scroll" id="adr-grid-scroll">
+        <div class="adr-grid" id="adr-grid"></div>
+      </div>
+
+      <div class="adr-graph-wrap" id="adr-graph-wrap" style="display:none">
+        <div id="adr-graph"></div>
+        <div class="adr-legend">
+          <span><svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke="#ff5f7a" stroke-width="2"/></svg> supersedes</span>
+          <span><svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke="#f5a623" stroke-width="2" stroke-dasharray="4 3"/></svg> amends</span>
+          <span><svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke="#4f7cff" stroke-width="2"/></svg> depends on</span>
+          <span><svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke="#454d6a" stroke-width="1"/></svg> relates to</span>
+          <span style="color:var(--purple)">▬ dashed ring = cross-project</span>
+        </div>
       </div>
     </div>
   </main>
@@ -1107,6 +1402,19 @@ function saveState() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
+    }).then(async res => {
+      // 409 = the server refused a stale snapshot (its next_id is ahead of
+      // ours, i.e. this tab has been open across writes it never saw). Say so
+      // loudly — a silent .catch() is what let the 2026-07-28 clobber look
+      // like a successful save.
+      if (res.status === 409) {
+        let detail = '';
+        try { detail = (await res.json()).detail || ''; } catch(e) {}
+        alert(
+          'DevFlow: this tab is out of date, so your change was NOT saved.\n\n' +
+          detail + '\n\nReload the page to pick up the current state, then redo it.'
+        );
+      }
     }).catch(() => {});
   }
 }
@@ -1201,12 +1509,24 @@ function isBlocked(ticket) {
 }
 
 // ── RENDER ──
+// NOTE: render() must NEVER call saveState(). It is called by view-only paths
+// (filterProject / filterView / setSort / init), so persisting here meant every
+// re-render POSTed the tab's whole in-memory state over the server's. A tab left
+// open on a stale snapshot then erased everything newer on its first click —
+// that is how T-366..T-497 (132 tickets) were lost on 2026-07-28.
+// Persist from the mutation functions only (setStatus / deleteTicket /
+// createTicket / createProject), never from a render.
 function render() {
   renderSidebar();
   renderBoard();
   renderStats();
-  if (state.selectedTicket) renderDetail(state.selectedTicket);
-  saveState();
+  // In the Decisions view the panel belongs to the selected ADR — re-rendering
+  // the last selected ticket over it would silently swap the panel's subject.
+  if (state.activeFilter === 'adrs') {
+    if (selectedAdr) renderAdrDetail(selectedAdr);
+  } else if (state.selectedTicket) {
+    renderDetail(state.selectedTicket);
+  }
 }
 
 function renderStats() {
@@ -1246,9 +1566,134 @@ function renderSidebar() {
   });
 }
 
+// ── GLOBAL SEARCH (T-582) ──
+// Cross-project recall: matches id / title / why / desc / project name AND
+// work-log text (the MCP search_tickets tool misses logs — they carry the
+// breadcrumbs). View-only: never touches saveState (see render() note above).
+// searchQuery is deliberately NOT on `state` so it can never ride a POST.
+let searchQuery = '';
+let _preSearchTitle = null;
+let _searchKbIndex = -1;
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function ticketMatches(t, q) {
+  if (t.id.toLowerCase().includes(q)) return true;
+  if ((t.title || '').toLowerCase().includes(q)) return true;
+  if ((t.why || '').toLowerCase().includes(q)) return true;
+  if ((t.desc || '').toLowerCase().includes(q)) return true;
+  const proj = getProject(t.projectId);
+  if (proj && proj.name.toLowerCase().includes(q)) return true;
+  return (t.log || []).some(e => (e.msg || '').toLowerCase().includes(q));
+}
+
+function matchWhere(t, q) {
+  if (t.id.toLowerCase().includes(q) || (t.title || '').toLowerCase().includes(q)) return 'title';
+  if ((t.why || '').toLowerCase().includes(q)) return 'why';
+  if ((t.desc || '').toLowerCase().includes(q)) return 'desc';
+  if ((t.log || []).some(e => (e.msg || '').toLowerCase().includes(q))) return 'log';
+  return 'project';
+}
+
+function onSearchInput(val) {
+  const wasEmpty = !searchQuery.trim();
+  searchQuery = val;
+  const q = val.trim().toLowerCase();
+  const results = document.getElementById('search-results');
+  _searchKbIndex = -1;
+  if (!q) {
+    results.classList.remove('open');
+    if (_preSearchTitle !== null) {
+      document.getElementById('board-title').textContent = _preSearchTitle;
+      _preSearchTitle = null;
+    }
+    render();
+    return;
+  }
+  if (wasEmpty && _preSearchTitle === null) {
+    _preSearchTitle = document.getElementById('board-title').textContent;
+  }
+  renderSearchResults(q);
+  const n = state.tickets.filter(t => ticketMatches(t, q)).length;
+  document.getElementById('board-title').textContent = `Search: “${val.trim()}” — ${n} hit${n === 1 ? '' : 's'}`;
+  render(); // the board live-filters via getFilteredTickets
+}
+
+function renderSearchResults(q) {
+  const results = document.getElementById('search-results');
+  const hits = state.tickets.filter(t => ticketMatches(t, q));
+  const statusColors = { backlog:'var(--text-muted)', active:'var(--accent)', blocked:'var(--red)', done:'var(--green)' };
+  if (!hits.length) {
+    results.innerHTML = `<div class="search-empty">No tickets match “${escHtml(q)}” — searched titles, why, desc and work logs across ${state.projects.length} projects.</div>`;
+    results.classList.add('open');
+    return;
+  }
+  const byProj = {};
+  hits.forEach(t => { (byProj[t.projectId] = byProj[t.projectId] || []).push(t); });
+  let html = '';
+  Object.keys(byProj).sort().forEach(pid => {
+    const proj = getProject(pid);
+    html += `<div class="search-group-label"><span style="width:6px;height:6px;border-radius:50%;background:${proj ? proj.color : '#888'};display:inline-block"></span>${escHtml(proj ? proj.name : 'no project')} · ${byProj[pid].length}</div>`;
+    byProj[pid].sort((a, b) => priOrder(a.priority) - priOrder(b.priority)).slice(0, 12).forEach(t => {
+      const c = statusColors[t.status] || 'var(--text-muted)';
+      html += `<div class="search-row" data-tid="${t.id}" onclick="jumpToTicket('${t.id}')">
+        <span class="sr-id">${t.id}</span>
+        <span class="sr-title">${escHtml(t.title)}</span>
+        <span class="sr-where">${matchWhere(t, q)}</span>
+        <span class="sr-status" style="background:${c}22;color:${c};border:1px solid ${c}44">${t.status}</span>
+      </div>`;
+    });
+    if (byProj[pid].length > 12) {
+      html += `<div class="search-empty">…${byProj[pid].length - 12} more in this project — the board below shows all hits</div>`;
+    }
+  });
+  results.innerHTML = html;
+  results.classList.add('open');
+}
+
+function jumpToTicket(id) {
+  const t = getTicket(id);
+  if (!t) return;
+  // leave search mode and land in the ticket's project context
+  searchQuery = '';
+  document.getElementById('global-search').value = '';
+  document.getElementById('search-results').classList.remove('open');
+  _preSearchTitle = null;
+  state.activeFilter = 'all';
+  state.selectedProject = t.projectId || 'all';
+  const proj = getProject(t.projectId);
+  document.getElementById('board-title').textContent = proj ? proj.name : 'All Tickets';
+  // static view items (All/Blocked/Critical) keep their class unless cleared;
+  // renderSidebar only manages project items
+  document.querySelectorAll('.project-item').forEach(el => el.classList.remove('active'));
+  selectTicket(id);   // board + detail panel
+  renderSidebar();    // active highlight follows state.selectedProject
+  requestAnimationFrame(() => {
+    for (const c of document.querySelectorAll('.ticket')) {
+      const idEl = c.querySelector('.ticket-id');
+      if (idEl && idEl.textContent === id) {
+        c.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        c.classList.add('search-flash');
+        setTimeout(() => c.classList.remove('search-flash'), 3400);
+        break;
+      }
+    }
+  });
+}
+
 function getFilteredTickets() {
   let tickets = [...state.tickets];
-  
+
+  // Search overrides project/view scoping — cross-project recall is the point.
+  const q = searchQuery.trim().toLowerCase();
+  if (q) {
+    return tickets
+      .filter(t => ticketMatches(t, q))
+      .sort((a, b) => (a.projectId || '').localeCompare(b.projectId || '') || priOrder(a.priority) - priOrder(b.priority));
+  }
+
   if (state.selectedProject !== 'all') {
     tickets = tickets.filter(t => t.projectId === state.selectedProject);
   }
@@ -1423,6 +1868,7 @@ function setStatus(ticketId, newStatus) {
   t.status = newStatus;
   t.log.push({ t: Date.now(), msg: `Status: <strong>${old}</strong> → <strong>${newStatus}</strong>` });
   render();
+  saveState();
 }
 
 function deleteTicket(id) {
@@ -1437,6 +1883,7 @@ function deleteTicket(id) {
   document.getElementById('panel-empty').style.display = '';
   document.getElementById('panel-content').style.display = 'none';
   render();
+  saveState();
 }
 
 // ── FILTERS ──
@@ -1455,9 +1902,430 @@ function filterView(view, el) {
   state.selectedProject = 'all';
   document.querySelectorAll('.project-item').forEach(e => e.classList.remove('active'));
   el.classList.add('active');
-  const titles = { all:'All Tickets', blocked:'Blocked Tickets', 'critical-path':'Critical Path' };
+  const titles = { all:'All Tickets', blocked:'Blocked Tickets', 'critical-path':'Critical Path', adrs:'Decisions — ADR Map' };
   document.getElementById('board-title').textContent = titles[view];
+  applyViewMode();
   render();
+}
+
+// The Decisions view reuses <main class="board"> — it swaps the kanban
+// columns for the ADR grid and hides the ticket sort buttons, which mean
+// nothing here. Everything else (header, search, detail panel) stays put.
+function applyViewMode() {
+  const isAdr = state.activeFilter === 'adrs';
+  document.querySelector('.columns').style.display = isAdr ? 'none' : 'grid';
+  document.getElementById('adr-view').style.display = isAdr ? 'block' : 'none';
+  const ctrls = document.querySelector('.board-controls');
+  if (ctrls) ctrls.style.display = isAdr ? 'none' : 'flex';
+  if (isAdr) loadAdrs();
+}
+
+// ══ DECISIONS VIEW (ADR MAP) ═══════════════════════════════════════════════
+//
+// The ADR index is a derived cache built by adr_index.py from every repo's
+// decisions.md. It is served read-only at /api/adrs; nothing in this view
+// ever writes. ADR numbers repeat across repos, so every record is keyed by
+// a uid of the form "<project>:ADR-NNN" — never key on the bare number.
+
+let adrIndex = null;
+let adrMode = 'grid';
+let selectedAdr = null;
+const adrExpanded = {};
+
+const ADR_STATUS_COLOR = {
+  accepted:    'var(--green)',
+  implemented: 'var(--green)',
+  proposed:    'var(--amber)',
+  deferred:    'var(--text-muted)',
+  superseded:  'var(--purple)',
+  rejected:    'var(--red)',
+};
+const ADR_LAYER_COLOR = {
+  ui: '#4f7cff', chatbot: '#2dd4a0', agentic: '#a78bfa', etl: '#f5a623',
+  datasets: '#22d3ee', 'plugins-engines': '#f472b6', infra: '#7a80a0',
+  security: '#ff5f7a', ops: '#84cc16',
+};
+const ADR_EDGE_STYLE = {
+  supersedes:    { color: '#ff5f7a', width: 2,   dash: '' },
+  superseded_by: { color: '#ff5f7a', width: 2,   dash: '' },
+  amends:        { color: '#f5a623', width: 2,   dash: '4 3' },
+  depends_on:    { color: '#4f7cff', width: 2,   dash: '' },
+  builds_on:     { color: '#4f7cff', width: 1.5, dash: '2 2' },
+  relates_to:    { color: '#454d6a', width: 1,   dash: '' },
+};
+
+async function loadAdrs() {
+  if (adrIndex) { renderAdrView(); return; }
+  const grid = document.getElementById('adr-grid');
+  grid.innerHTML = `<div style="color:var(--text-dim);font-size:12px;padding:20px">Loading ADR index…</div>`;
+  try {
+    const res = await fetch(`${DEVFLOW_API}/api/adrs`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      grid.innerHTML = `<div style="color:var(--amber);font-size:12px;padding:20px">
+        ${err.error || 'Could not load the ADR index.'}<br>
+        <span style="color:var(--text-dim)">Build it with: <code>python3 adr_index.py</code></span></div>`;
+      return;
+    }
+    adrIndex = await res.json();
+  } catch (e) {
+    grid.innerHTML = `<div style="color:var(--red);font-size:12px;padding:20px">DevFlow API unreachable — the Decisions view needs http_api.py running.</div>`;
+    return;
+  }
+  populateAdrProjectFilter();
+  document.getElementById('view-adrs').textContent = adrIndex.counts.adrs;
+  renderAdrView();
+}
+
+function populateAdrProjectFilter() {
+  const sel = document.getElementById('adr-f-project');
+  const repos = [...new Set(adrIndex.adrs.map(a => a.repoName))].sort();
+  sel.innerHTML = '<option value="">All projects</option>' +
+    repos.map(r => `<option value="${r}">${r}</option>`).join('');
+}
+
+function setAdrMode(mode) {
+  adrMode = mode;
+  document.getElementById('adr-mode-grid').classList.toggle('active', mode === 'grid');
+  document.getElementById('adr-mode-graph').classList.toggle('active', mode === 'graph');
+  document.getElementById('adr-grid-scroll').style.display = mode === 'grid' ? 'block' : 'none';
+  document.getElementById('adr-graph-wrap').style.display = mode === 'graph' ? 'block' : 'none';
+  if (mode === 'graph') renderAdrGraph();
+}
+
+function getFilteredAdrs() {
+  if (!adrIndex) return [];
+  const proj = document.getElementById('adr-f-project').value;
+  const status = document.getElementById('adr-f-status').value;
+  const tix = document.getElementById('adr-f-tickets').value;
+  const q = document.getElementById('adr-f-search').value.trim().toLowerCase();
+
+  return adrIndex.adrs.filter(a => {
+    if (proj && a.repoName !== proj) return false;
+    if (status && a.status !== status) return false;
+    if (tix === 'yes' && !a.tickets.length) return false;
+    if (tix === 'no' && a.tickets.length) return false;
+    if (q && !(a.title.toLowerCase().includes(q) || a.uid.toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+
+function renderAdrView() {
+  if (!adrIndex) return;
+  renderAdrHealth();
+  if (adrMode === 'graph') { renderAdrGraph(); return; }
+
+  const adrs = getFilteredAdrs();
+  const grid = document.getElementById('adr-grid');
+
+  // Only render rows/columns that actually hold something. A full
+  // 9x11 matrix would be mostly empty cells and unreadable.
+  const layers = adrIndex.layers.filter(l => adrs.some(a => a.layer === l));
+  const domains = Object.keys(adrIndex.domainLabels)
+    .filter(d => adrs.some(a => a.domain === d));
+
+  if (!adrs.length) {
+    grid.style.gridTemplateColumns = '1fr';
+    grid.innerHTML = `<div style="color:var(--text-dim);font-size:12px;padding:20px">No ADRs match these filters.</div>`;
+    return;
+  }
+
+  // Fixed column width, not 1fr: with long ADR titles inside, a flexible
+  // track resolves against max-content and the grid balloons past 11000px.
+  grid.style.gridTemplateColumns = `130px repeat(${domains.length}, 180px)`;
+
+  let html = '<div></div>';  // empty top-left corner
+  domains.forEach(d => {
+    const n = adrs.filter(a => a.domain === d).length;
+    html += `<div class="adr-col-head">${adrIndex.domainLabels[d]} <span style="color:var(--text-muted)">${n}</span></div>`;
+  });
+
+  layers.forEach(layer => {
+    const n = adrs.filter(a => a.layer === layer).length;
+    html += `<div class="adr-row-head">
+      <span class="lc" style="background:${ADR_LAYER_COLOR[layer] || 'var(--text-muted)'}"></span>
+      ${adrIndex.layerLabels[layer]} <span style="color:var(--text-muted)">${n}</span>
+    </div>`;
+    domains.forEach(domain => {
+      const cell = adrs
+        .filter(a => a.layer === layer && a.domain === domain)
+        .sort((x, y) => (y.date || '0000').localeCompare(x.date || '0000'));
+      if (!cell.length) { html += `<div class="adr-cell empty"></div>`; return; }
+
+      // Only a few chips per cell by default. A row is as tall as its
+      // fullest cell, so showing everything makes the 150-ADR columns push
+      // every other row off screen.
+      const key = `${layer}|${domain}`;
+      const open = adrExpanded[key];
+      const CAP = 3;
+      const shown = open ? cell : cell.slice(0, CAP);
+      html += `<div class="adr-cell">` +
+        shown.map(buildAdrChip).join('') +
+        (cell.length > CAP
+          ? `<div class="adr-more" onclick="toggleAdrCell('${key}')">${open ? '− less' : `+ ${cell.length - CAP} more`}</div>`
+          : '') +
+        `</div>`;
+    });
+  });
+
+  grid.innerHTML = html;
+}
+
+function toggleAdrCell(key) {
+  adrExpanded[key] = !adrExpanded[key];
+  renderAdrView();
+}
+
+function buildAdrChip(a) {
+  const color = ADR_STATUS_COLOR[a.status] || 'var(--text-muted)';
+  // Ticket badges carry the ticket's LIVE status colour, not the ADR's. That
+  // join is the point of this view: a decision shows whether its work landed.
+  const statusColors = { backlog:'#454d6a', active:'#4f7cff', blocked:'#ff5f7a', done:'#2dd4a0' };
+  const tix = a.tickets.map(id => {
+    const t = getTicket(id);
+    const c = t ? statusColors[t.status] : '#454d6a';
+    return `<span class="adr-tix" style="color:${c};border-color:${c}66;background:${c}18"
+             title="${t ? t.title.replace(/"/g, '&quot;') + ' — ' + t.status : 'unknown ticket'}">${id}</span>`;
+  }).join('');
+
+  return `<div class="adr-chip ${selectedAdr === a.uid ? 'selected' : ''}"
+               style="border-left-color:${color}"
+               onclick="selectAdr('${a.uid}')">
+    <div class="adr-chip-top">
+      <span class="adr-chip-id">${a.adrId}</span>
+      <span style="width:6px;height:6px;border-radius:50%;background:${color}" title="${a.status}"></span>
+      ${a.statusSource === 'inferred' ? '<span class="adr-guess" title="No status marker in the ADR — assumed accepted">?</span>' : ''}
+      ${a.date ? `<span style="margin-left:auto;font-size:9px;color:var(--text-muted);font-family:var(--mono)">${a.date.slice(2)}</span>` : ''}
+    </div>
+    <div class="adr-chip-title">${escapeHtml(a.title)}</div>
+    ${tix ? `<div class="adr-chip-tix">${tix}</div>` : ''}
+  </div>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
+function renderAdrHealth() {
+  const h = adrIndex.health;
+  const el = document.getElementById('adr-health');
+  const items = [
+    ['collisions', h.numberCollisions.length, false],
+    ['no ticket', h.adrsWithoutTickets.length, h.adrsWithoutTickets.length > 0],
+    ['stale proposals', h.staleProposals.length, h.staleProposals.length > 0],
+    ['orphan refs', h.orphanTicketRefs.length, h.orphanTicketRefs.length > 0],
+    ['unconfirmed tags', h.unconfirmedCategories, false],
+  ];
+  el.innerHTML = items
+    .map(([label, n, warn]) => `<span class="adr-health-pill ${warn ? 'warn' : ''}" title="${label}">${n} ${label}</span>`)
+    .join('');
+}
+
+// ── Detail panel ──
+function selectAdr(uid) {
+  selectedAdr = uid;
+  if (adrMode === 'graph') renderAdrGraph(); else renderAdrView();
+  renderAdrDetail(uid);
+}
+
+function renderAdrDetail(uid) {
+  const a = adrIndex.adrs.find(x => x.uid === uid);
+  if (!a) return;
+  const byUid = Object.fromEntries(adrIndex.adrs.map(x => [x.uid, x]));
+
+  document.getElementById('panel-empty').style.display = 'none';
+  const content = document.getElementById('panel-content');
+  content.style.display = 'flex';
+
+  const color = ADR_STATUS_COLOR[a.status] || 'var(--text-muted)';
+  const statusColors = { backlog:'#454d6a', active:'#4f7cff', blocked:'#ff5f7a', done:'#2dd4a0' };
+
+  const ticketRows = a.tickets.length
+    ? a.tickets.map(id => {
+        const t = getTicket(id);
+        if (!t) return '';
+        const c = statusColors[t.status];
+        return `<div class="adr-edge-row">
+          <span class="adr-edge-ref" onclick="jumpToTicket('${id}')">${id} — ${escapeHtml(t.title)}</span>
+          <span class="dep-status-chip" style="background:${c}22;color:${c};border:1px solid ${c}44">${t.status}</span>
+        </div>`;
+      }).join('')
+    : `<div style="font-size:11px;color:var(--text-muted)">No DevFlow ticket references this decision</div>`;
+
+  const edgeRows = a.edges.length
+    ? a.edges.map(e => {
+        const t = byUid[e.target];
+        return `<div class="adr-edge-row">
+          <span class="adr-edge-kind">${e.type.replace(/_/g, ' ')}</span>
+          ${t
+            ? `<span class="adr-edge-ref" onclick="selectAdr('${e.target}')">${t.adrId} — ${escapeHtml(t.title.slice(0, 60))}</span>`
+            : `<span style="color:var(--text-muted)">${e.target} (not indexed)</span>`}
+          ${e.crossProject ? `<span class="adr-xproj">${t ? t.repoName : 'cross'}</span>` : ''}
+        </div>`;
+      }).join('')
+    : `<div style="font-size:11px;color:var(--text-muted)">No links to other decisions</div>`;
+
+  // Show the sections that carry the argument, in the order they are written.
+  const order = ['context', 'decision', 'alternatives considered', 'consequences', 'related'];
+  const secs = order
+    .filter(k => a.sections[k])
+    .map(k => `<div class="adr-sec-title">${k}</div>
+               <div class="adr-sec-body">${escapeHtml(a.sections[k])}</div>`)
+    .join('');
+
+  content.innerHTML = `
+    <div class="panel-header">
+      <span class="panel-ticket-id">${a.adrId} · ${a.repoName}</span>
+      <span class="dep-status-chip" style="background:${color}22;color:${color};border:1px solid ${color}44">
+        ${a.status}${a.statusSource === 'inferred' ? ' (assumed)' : ''}
+      </span>
+    </div>
+    <div style="padding:14px 16px;overflow-y:auto;flex:1">
+      <div style="font-size:14px;line-height:1.45;margin-bottom:6px">${escapeHtml(a.title)}</div>
+      <div style="font-size:10px;font-family:var(--mono);color:var(--text-muted);margin-bottom:10px">
+        ${a.date || 'undated'} ·
+        <span style="color:${ADR_LAYER_COLOR[a.layer]}">${adrIndex.layerLabels[a.layer] || a.layer}</span> ·
+        ${adrIndex.domainLabels[a.domain] || a.domain}
+        ${a.categorySource === 'keyword' ? ' · <span title="Auto-guessed category, not yet confirmed">tag guessed</span>' : ''}
+      </div>
+      <div style="font-size:9px;font-family:var(--mono);color:var(--text-muted);word-break:break-all;margin-bottom:4px">${a.uid}</div>
+      <div style="font-size:9px;font-family:var(--mono);color:var(--text-muted);word-break:break-all">${a.sourceFile}</div>
+
+      <div class="adr-sec-title">DevFlow tickets</div>
+      ${ticketRows}
+      ${a.orphanTickets && a.orphanTickets.length
+        ? `<div style="font-size:10px;color:var(--amber);margin-top:4px">References missing tickets: ${a.orphanTickets.join(', ')}</div>`
+        : ''}
+
+      <div class="adr-sec-title">Related decisions</div>
+      ${edgeRows}
+
+      ${secs}
+    </div>
+  `;
+}
+
+// Clicking a ticket badge leaves the Decisions view and lands on that ticket.
+function jumpToTicket(id) {
+  const el = [...document.querySelectorAll('.project-item')]
+    .find(e => e.textContent.includes('All Tickets'));
+  if (el) filterView('all', el);
+  selectTicket(id);
+}
+
+// ── Scoped relationship graph ──
+//
+// Renders the selected ADR plus its neighbours (and their neighbours), not
+// the whole index. 507 nodes at once is a hairball that answers no question;
+// "what led to this decision, and what did it lead to" is answerable.
+function renderAdrGraph() {
+  const host = document.getElementById('adr-graph');
+  if (!adrIndex) return;
+
+  const byUid = Object.fromEntries(adrIndex.adrs.map(a => [a.uid, a]));
+
+  if (!selectedAdr || !byUid[selectedAdr]) {
+    // No focus yet: show the most-connected decisions as entry points.
+    const degree = {};
+    adrIndex.adrs.forEach(a => {
+      a.edges.forEach(e => {
+        degree[a.uid] = (degree[a.uid] || 0) + 1;
+        degree[e.target] = (degree[e.target] || 0) + 1;
+      });
+    });
+    const top = Object.entries(degree)
+      .filter(([uid]) => byUid[uid])
+      .sort((x, y) => y[1] - x[1]).slice(0, 12);
+    host.innerHTML = `<div class="adr-graph-empty">
+      Pick a decision to see what it connects to.<br><br>
+      <span style="color:var(--text-dim)">Most connected:</span><br>
+      ${top.map(([uid, d]) =>
+        `<span class="adr-edge-ref" style="display:inline-block;margin:4px 6px"
+               onclick="selectAdr('${uid}')">${byUid[uid].adrId} ${escapeHtml(byUid[uid].title.slice(0, 34))} (${d})</span>`
+      ).join('')}
+    </div>`;
+    return;
+  }
+
+  const centre = byUid[selectedAdr];
+
+  // Undirected adjacency so incoming edges show up too — a decision that was
+  // superseded never links forward to the thing that replaced it.
+  const adj = {};
+  const addEdge = (from, to, type, xproj) => {
+    (adj[from] = adj[from] || []).push({ to, type, xproj });
+    (adj[to] = adj[to] || []).push({ to: from, type, xproj });
+  };
+  adrIndex.adrs.forEach(a =>
+    a.edges.forEach(e => { if (byUid[e.target]) addEdge(a.uid, e.target, e.type, e.crossProject); }));
+
+  const ring1 = [...new Set((adj[centre.uid] || []).map(e => e.to))];
+  const ring2 = [...new Set(ring1.flatMap(u => (adj[u] || []).map(e => e.to)))]
+    .filter(u => u !== centre.uid && !ring1.includes(u))
+    .slice(0, 18);
+
+  if (!ring1.length) {
+    host.innerHTML = `<div class="adr-graph-empty">
+      ${centre.adrId} — ${escapeHtml(centre.title)}<br><br>
+      This decision references no others, and none reference it.
+    </div>`;
+    return;
+  }
+
+  const W = Math.max(720, host.clientWidth || 720), H = 460;
+  const cx = W / 2, cy = H / 2;
+  const pos = { [centre.uid]: { x: cx, y: cy } };
+  const place = (list, radius) => list.forEach((uid, i) => {
+    const ang = (i / list.length) * Math.PI * 2 - Math.PI / 2;
+    pos[uid] = { x: cx + radius * Math.cos(ang), y: cy + radius * Math.sin(ang) };
+  });
+  place(ring1, 130);
+  place(ring2, 205);
+
+  const shown = new Set([centre.uid, ...ring1, ...ring2]);
+  const drawn = new Set();
+  let lines = '';
+  adrIndex.adrs.forEach(a => {
+    if (!shown.has(a.uid)) return;
+    a.edges.forEach(e => {
+      if (!shown.has(e.target)) return;
+      const key = [a.uid, e.target].sort().join('|');
+      if (drawn.has(key)) return;
+      drawn.add(key);
+      const s = ADR_EDGE_STYLE[e.type] || ADR_EDGE_STYLE.relates_to;
+      const p1 = pos[a.uid], p2 = pos[e.target];
+      lines += `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}"
+                 stroke="${s.color}" stroke-width="${s.width}"
+                 ${s.dash ? `stroke-dasharray="${s.dash}"` : ''} opacity="0.75"/>`;
+    });
+  });
+
+  let nodes = '';
+  [...shown].forEach(uid => {
+    const a = byUid[uid], p = pos[uid];
+    if (!a || !p) return;
+    const isCentre = uid === centre.uid;
+    const r = isCentre ? 16 : (6 + Math.min(a.tickets.length * 2, 8));
+    const fill = ADR_LAYER_COLOR[a.layer] || '#7a80a0';
+    const xproj = a.project !== centre.project;
+    nodes += `<g class="adr-node" onclick="selectAdr('${uid}')">
+      <circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}${isCentre ? '' : '99'}"
+              stroke="${isCentre ? '#e8eaf2' : (xproj ? '#a78bfa' : '#2a2f45')}"
+              stroke-width="${isCentre ? 2.5 : 1.5}"
+              ${xproj && !isCentre ? 'stroke-dasharray="3 2"' : ''}>
+        <title>${escapeHtml(a.repoName + ' ' + a.adrId + ' — ' + a.title)}</title>
+      </circle>
+      <text x="${p.x}" y="${p.y + r + 11}" text-anchor="middle">${a.adrId}</text>
+    </g>`;
+  });
+
+  host.innerHTML = `
+    <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">
+      <b style="color:var(--text)">${centre.adrId}</b> — ${escapeHtml(centre.title.slice(0, 90))}
+      <span style="color:var(--text-muted)"> · ${ring1.length} direct, ${ring2.length} indirect</span>
+    </div>
+    <svg width="100%" viewBox="0 0 ${W} ${H}" style="display:block">${lines}${nodes}</svg>`;
 }
 
 function setSort(mode, el) {
@@ -1520,6 +2388,7 @@ function createTicket() {
   ['f-title','f-why','f-desc'].forEach(id => document.getElementById(id).value = '');
   
   render();
+  saveState();
   selectTicket(t.id);
 }
 
@@ -1550,6 +2419,7 @@ function createProject() {
   document.getElementById('fp-goal').value = '';
   closeModal('modal-project');
   render();
+  saveState();
 }
 
 // ── STATUS REPORT ──
@@ -1646,13 +2516,55 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open'));
   if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openNewTicket(); }
+  // "/" focuses global search unless already typing somewhere (T-582)
+  if (e.key === '/' && !e.metaKey && !e.ctrlKey && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
+    e.preventDefault();
+    document.getElementById('global-search').focus();
+  }
 });
+
+// ── GLOBAL SEARCH wiring (T-582) ──
+{
+  const searchEl = document.getElementById('global-search');
+  searchEl.addEventListener('input', e => onSearchInput(e.target.value));
+  searchEl.addEventListener('focus', () => {
+    if (searchQuery.trim()) renderSearchResults(searchQuery.trim().toLowerCase());
+  });
+  searchEl.addEventListener('keydown', e => {
+    const rows = document.querySelectorAll('#search-results .search-row');
+    if (e.key === 'Escape') {
+      searchEl.value = '';
+      onSearchInput('');
+      searchEl.blur();
+      e.stopPropagation();
+    } else if (e.key === 'ArrowDown' && rows.length) {
+      e.preventDefault();
+      _searchKbIndex = Math.min(_searchKbIndex + 1, rows.length - 1);
+      rows.forEach((r, i) => r.classList.toggle('kb-focus', i === _searchKbIndex));
+      rows[_searchKbIndex].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'ArrowUp' && rows.length) {
+      e.preventDefault();
+      _searchKbIndex = Math.max(_searchKbIndex - 1, 0);
+      rows.forEach((r, i) => r.classList.toggle('kb-focus', i === _searchKbIndex));
+      rows[_searchKbIndex].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter' && rows.length) {
+      e.preventDefault();
+      jumpToTicket(rows[_searchKbIndex >= 0 ? _searchKbIndex : 0].dataset.tid);
+    }
+  });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.search-wrap')) document.getElementById('search-results').classList.remove('open');
+  });
+}
 
 // ── INIT ──
 (async () => {
   await loadState();
   if (!_apiAvailable) seedDemo();
   render();
+  // Warm the ADR index so the sidebar shows a real count before the view is
+  // ever opened. Failure is silent — the Decisions view reports it properly.
+  if (_apiAvailable) loadAdrs().catch(() => {});
 })();
 </script>
 </body>

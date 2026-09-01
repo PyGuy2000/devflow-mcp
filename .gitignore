@@ -13,6 +13,9 @@ logs/
 
 # State file — contains your personal tickets. Do not commit.
 devflow_state.json
+devflow_state.json.lock
+devflow_state.json.bak.*
+backups/
 
 # Local editor / OS
 .DS_Store
@@ -21,3 +24,7 @@ devflow_state.json
 
 # Local override (optional)
 config.local.json
+.gitnexus
+
+# Derived ADR cache — rebuild with adr_index.py, never commit
+adr_index.json

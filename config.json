@@ -1,5 +1,8 @@
 {
   "projecthub_db_path": "/path/to/your/projecthub.db",
   "auto_time_entries": true,
-  "default_classification": "personal"
+  "default_classification": "personal",
+  "stale_active_days": 14,
+  "wip_limit": 10,
+  "max_timer_hours": 8.0
 }

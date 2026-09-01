@@ -6,9 +6,11 @@ Reads directly from devflow_state.json (no MCP call needed).
 
 import json
 import sys
+import time
 from pathlib import Path
 
 STATE_FILE = Path.home() / ".config" / "devflow-mcp" / "devflow_state.json"
+STALE_ACTIVE_DAYS = 14
 
 
 def main():
@@ -39,6 +41,12 @@ def main():
     lines.append("[DevFlow] Quick Status")
     lines.append(f"  {len(active)} active | {len(blocked)} blocked | {len(backlog)} backlog | {len(done)} done")
 
+    now_ms = time.time() * 1000
+
+    def days_idle(t):
+        last = max((e["t"] for e in t.get("log", [])), default=t.get("created", now_ms))
+        return int((now_ms - last) // 86_400_000)
+
     if active:
         lines.append("")
         lines.append("  Active:")
@@ -46,6 +54,17 @@ def main():
             proj = projects.get(t["projectId"], "?")
             unblocks = t.get("blocksTickets", [])
             suffix = f" (unblocks {', '.join(unblocks)})" if unblocks else ""
+            idle = days_idle(t)
+            if idle >= STALE_ACTIVE_DAYS:
+                suffix += f" [idle {idle}d]"
+            if t.get("verifyCmd"):
+                v = t.get("verified")
+                if not v:
+                    suffix += " [unverified]"
+                elif v.get("exit") != 0:
+                    suffix += f" [verify failing: exit {v['exit']}]"
+                else:
+                    suffix += f" [verified {v.get('rev', '?')}]"
             lines.append(f"    {t['id']} [{proj}] {t['title']}{suffix}")
 
     if blocked:
@@ -55,6 +74,24 @@ def main():
             proj = projects.get(t["projectId"], "?")
             waiting = ", ".join(t.get("blockedBy", []))
             lines.append(f"    {t['id']} [{proj}] {t['title']} <- waiting on {waiting}" if waiting else f"    {t['id']} [{proj}] {t['title']} <- external")
+
+    # Blocked tickets whose blockers are all done
+    ticket_map = {t["id"]: t for t in tickets}
+    ready = [
+        t for t in blocked
+        if t.get("blockedBy")
+        and all(
+            ticket_map[d]["status"] == "done"
+            for d in t["blockedBy"]
+            if d in ticket_map
+        )
+    ]
+    if ready:
+        lines.append("")
+        lines.append("  Ready to unblock (all blockers done):")
+        for t in ready:
+            proj = projects.get(t["projectId"], "?")
+            lines.append(f"    {t['id']} [{proj}] {t['title']}")
 
     summary = "\n".join(lines)
 

@@ -9,6 +9,7 @@ side-effects to a ProjectHub SQLite database for portfolio tracking.
 import json
 import os
 import re
+import subprocess
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,16 +17,40 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
+# Concurrency-safe persistence (T-174): all writes go through mutate_state(),
+# which locks + re-reads + atomically replaces the state file. Reads use
+# read_state(). The legacy in-memory load/rewrite pattern caused silent ticket
+# loss under multiple concurrent server instances.
+from state_store import (
+    CONFIG_DIR,
+    STATE_FILE,
+    abort,
+    mutate_state,
+    next_ticket_id,
+    read_state,
+)
+
+# ADR text parsing lives in adr_parse.py so scan_project (below) and the ADR
+# index builder (adr_index.py) share one definition of "what an ADR is". When
+# they were separate copies the Decisions view under-reported silently.
+from adr_parse import (
+    _load_decisions,
+    _parse_adr_sections,
+    _parse_adrs,
+)
+
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-CONFIG_DIR = Path(os.path.expanduser("~/.config/devflow-mcp"))
-STATE_FILE = CONFIG_DIR / "devflow_state.json"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
     "projecthub_db_path": "",
     "auto_time_entries": True,
     "default_classification": "personal",
+    "stale_active_days": 14,
+    "wip_limit": 10,
+    "max_timer_hours": 8.0,
+    "verify_timeout_sec": 600,
 }
 
 
@@ -37,31 +62,11 @@ def load_config() -> dict:
 
 
 # ── State Management ───────────────────────────────────────────────────────────
+#
+# read_state() / mutate_state() / next_ticket_id() live in state_store.py.
+# load_state is kept as an alias of read_state for the read-only tools below.
 
-DEFAULT_STATE = {
-    "projects": [],
-    "tickets": [],
-    "next_id": 1,
-}
-
-
-def load_state() -> dict:
-    if STATE_FILE.exists():
-        with open(STATE_FILE) as f:
-            return {**DEFAULT_STATE, **json.load(f)}
-    return dict(DEFAULT_STATE)
-
-
-def save_state(state: dict) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
-
-
-def next_ticket_id(state: dict) -> str:
-    tid = f"T-{state['next_id']:03d}"
-    state["next_id"] = state["next_id"] + 1
-    return tid
+load_state = read_state
 
 
 # ── ProjectHub Bridge (imported lazily) ────────────────────────────────────────
@@ -77,7 +82,9 @@ def get_bridge():
         config = load_config()
         db_path = config["projecthub_db_path"]
         if Path(db_path).exists():
-            _bridge = ProjectHubBridge(db_path)
+            _bridge = ProjectHubBridge(
+                db_path, max_timer_hours=config.get("max_timer_hours", 8.0)
+            )
         else:
             _bridge = None
     return _bridge
@@ -92,7 +99,9 @@ mcp = FastMCP("devflow")
 
 
 @mcp.tool()
-def create_project(name: str, goal: str, color: str = "#4f7cff") -> dict:
+def create_project(
+    name: str, goal: str, color: str = "#4f7cff", repo_path: str = ""
+) -> dict:
     """
     Register a new project in DevFlow.
 
@@ -100,29 +109,36 @@ def create_project(name: str, goal: str, color: str = "#4f7cff") -> dict:
         name: Project name (short, snake_case preferred).
         goal: What this project is ultimately for.
         color: Hex color for the project badge. Defaults to blue.
+        repo_path: Absolute path to the project's checkout. Required only if
+                   this project's tickets use verify_cmd — it's the working
+                   directory the verifier runs in.
     """
-    state = load_state()
 
-    # Check for duplicate name
-    for p in state["projects"]:
-        if p["name"] == name:
-            return {"error": f"Project '{name}' already exists", "project": p}
+    def _apply(state):
+        # Check for duplicate name (inside the lock, against fresh state)
+        for p in state["projects"]:
+            if p["name"] == name:
+                abort({"error": f"Project '{name}' already exists", "project": p})
 
-    project = {
-        "id": f"proj-{name.lower().replace(' ', '_')}",
-        "name": name,
-        "goal": goal,
-        "color": color,
-    }
-    state["projects"] = [*state["projects"], project]
-    save_state(state)
+        project = {
+            "id": f"proj-{name.lower().replace(' ', '_')}",
+            "name": name,
+            "goal": goal,
+            "color": color,
+            "repoPath": repo_path,
+        }
+        state["projects"] = [*state["projects"], project]
+        return {"success": True, "project": project}
 
-    # Bridge: upsert into ProjectHub
-    bridge = get_bridge()
-    if bridge:
-        bridge.upsert_project(name, goal)
+    result = mutate_state(_apply)
 
-    return {"success": True, "project": project}
+    # Bridge: upsert into ProjectHub (outside the lock, only on success)
+    if result.get("success"):
+        bridge = get_bridge()
+        if bridge:
+            bridge.upsert_project(name, goal)
+
+    return result
 
 
 @mcp.tool()
@@ -134,6 +150,7 @@ def add_ticket(
     blocked_by: Optional[list[str]] = None,
     status: str = "backlog",
     desc: str = "",
+    verify_cmd: str = "",
 ) -> dict:
     """
     Add a ticket to a project.
@@ -146,107 +163,171 @@ def add_ticket(
         blocked_by: List of ticket IDs (e.g. ["T-001", "T-003"]) that block this ticket.
         status: Initial status: backlog, active, blocked, or done. Defaults to backlog.
         desc: Technical details and implementation approach (optional).
+        verify_cmd: Shell command that proves this ticket is done, e.g.
+                    "pytest tests/test_foo.py -q". If set, the ticket cannot
+                    move to 'done' until verify_ticket() runs it to exit 0 on
+                    the current HEAD. Prefer a command the human chose.
     """
-    state = load_state()
+    captured = {}
 
-    # Resolve project
-    proj = _resolve_project(state, project)
-    if not proj:
-        return {"error": f"Project '{project}' not found. Create it first."}
+    def _apply(state):
+        # Resolve project
+        proj = _resolve_project(state, project)
+        if not proj:
+            abort({"error": f"Project '{project}' not found. Create it first."})
 
-    if priority not in ("critical", "high", "medium", "low"):
-        return {"error": f"Invalid priority '{priority}'. Use critical/high/medium/low."}
+        if priority not in ("critical", "high", "medium", "low"):
+            abort({"error": f"Invalid priority '{priority}'. Use critical/high/medium/low."})
 
-    if status not in ("backlog", "active", "blocked", "done"):
-        return {"error": f"Invalid status '{status}'. Use backlog/active/blocked/done."}
+        if status not in ("backlog", "active", "blocked", "done"):
+            abort({"error": f"Invalid status '{status}'. Use backlog/active/blocked/done."})
 
-    blocked_by = blocked_by or []
-    ticket_id = next_ticket_id(state)
-    now_ms = int(time.time() * 1000)
+        bl = blocked_by or []
+        ticket_id = next_ticket_id(state)
+        now_ms = int(time.time() * 1000)
 
-    ticket = {
-        "id": ticket_id,
-        "title": title,
-        "why": why,
-        "desc": desc,
-        "projectId": proj["id"],
-        "priority": priority,
-        "status": status,
-        "blockedBy": blocked_by,
-        "blocksTickets": [],
-        "created": now_ms,
-        "log": [{"t": now_ms, "msg": "Ticket created"}],
-    }
+        ticket = {
+            "id": ticket_id,
+            "title": title,
+            "why": why,
+            "desc": desc,
+            "projectId": proj["id"],
+            "priority": priority,
+            "status": status,
+            "blockedBy": bl,
+            "blocksTickets": [],
+            "created": now_ms,
+            "verifyCmd": verify_cmd,
+            "verified": None,
+            "log": [{"t": now_ms, "msg": "Ticket created"}],
+        }
 
-    # Update reverse dependencies
-    updated_tickets = []
-    for t in state["tickets"]:
-        if t["id"] in blocked_by:
-            t = {**t, "blocksTickets": [*t["blocksTickets"], ticket_id]}
-        updated_tickets.append(t)
+        # Update reverse dependencies
+        updated_tickets = []
+        for t in state["tickets"]:
+            if t["id"] in bl:
+                t = {**t, "blocksTickets": [*t["blocksTickets"], ticket_id]}
+            updated_tickets.append(t)
 
-    state["tickets"] = [*updated_tickets, ticket]
-    save_state(state)
+        state["tickets"] = [*updated_tickets, ticket]
+        captured.update(ticket=ticket, proj=proj, state=state)
+        return {"success": True, "ticket": ticket}
 
-    # Bridge: if status is active, start time tracking
-    if status == "active":
-        _bridge_ticket_active(ticket, proj, state)
+    result = mutate_state(_apply)
 
-    return {"success": True, "ticket": ticket}
+    # Bridge: if status is active, start time tracking (outside the lock)
+    if result.get("success") and status == "active":
+        _bridge_ticket_active(captured["ticket"], captured["proj"], captured["state"])
+
+    return result
 
 
 @mcp.tool()
-def update_ticket_status(ticket_id: str, new_status: str) -> dict:
+def update_ticket_status(
+    ticket_id: str, new_status: str, waiver: Optional[str] = None
+) -> dict:
     """
     Move a ticket between statuses.
+
+    A ticket that carries a verify_cmd cannot reach 'done' until verify_ticket()
+    has run that command to exit 0 against the current HEAD. Proof from an
+    earlier revision is refused — the "one last cleanup commit" is exactly the
+    change that breaks a suite everyone stopped watching.
 
     Args:
         ticket_id: The ticket ID (e.g. "T-001").
         new_status: Target status: backlog, active, blocked, or done.
+        waiver: Human reason for closing without passing verification, e.g.
+                "checker needs a live k8s context, ran manually". Recorded on
+                the ticket permanently. Only supply this when the human asked
+                for it — an agent waiving its own gate defeats the point.
     """
     if new_status not in ("backlog", "active", "blocked", "done"):
         return {"error": f"Invalid status '{new_status}'. Use backlog/active/blocked/done."}
 
-    state = load_state()
+    # The gate shells out to git for the current HEAD, so it runs before the
+    # lock is taken — never hold the state lock across a subprocess.
+    if new_status == "done" and not waiver:
+        gate = _verification_gate(ticket_id)
+        if gate:
+            return gate
 
-    ticket = None
-    for t in state["tickets"]:
-        if t["id"] == ticket_id:
-            ticket = t
-            break
+    captured = {}
 
-    if not ticket:
-        return {"error": f"Ticket '{ticket_id}' not found."}
+    def _apply(state):
+        ticket = None
+        for t in state["tickets"]:
+            if t["id"] == ticket_id:
+                ticket = t
+                break
 
-    old_status = ticket["status"]
-    if old_status == new_status:
-        return {"info": f"Ticket {ticket_id} is already '{new_status}'.", "ticket": ticket}
+        if not ticket:
+            abort({"error": f"Ticket '{ticket_id}' not found."})
 
-    now_ms = int(time.time() * 1000)
-    log_entry = {"t": now_ms, "msg": f"Status: {old_status} → {new_status}"}
+        old_status = ticket["status"]
+        if old_status == new_status:
+            abort({"info": f"Ticket {ticket_id} is already '{new_status}'.", "ticket": ticket})
 
-    updated_ticket = {
-        **ticket,
-        "status": new_status,
-        "log": [*ticket["log"], log_entry],
-    }
+        now_ms = int(time.time() * 1000)
+        msg = f"Status: {old_status} → {new_status}"
+        if waiver and new_status == "done" and ticket.get("verifyCmd"):
+            msg += f" — WAIVED verification: {waiver}"
+        log_entry = {"t": now_ms, "msg": msg}
 
-    state["tickets"] = [
-        updated_ticket if t["id"] == ticket_id else t for t in state["tickets"]
-    ]
-    save_state(state)
+        updated_ticket = {
+            **ticket,
+            "status": new_status,
+            "log": [*ticket["log"], log_entry],
+        }
 
-    # Bridge side-effects
-    proj = _find_project_by_id(state, updated_ticket["projectId"])
+        state["tickets"] = [
+            updated_ticket if t["id"] == ticket_id else t for t in state["tickets"]
+        ]
+        proj = _find_project_by_id(state, updated_ticket["projectId"])
+        captured.update(updated=updated_ticket, old=old_status, proj=proj, state=state)
 
-    if new_status == "active" and old_status != "active":
-        _bridge_ticket_active(updated_ticket, proj, state)
-    elif new_status == "done" and old_status != "done":
-        _bridge_ticket_done(updated_ticket, proj, state)
-    elif new_status == "blocked":
-        _bridge_ticket_blocked(updated_ticket, proj, state)
+        # If this ticket just finished, report blocked tickets it fully unblocks
+        ready = []
+        if new_status == "done":
+            ready = [
+                {"id": t["id"], "title": t["title"], "project": _project_name_by_id(state, t["projectId"])}
+                for t in _ready_to_unblock(state)
+                if ticket_id in t["blockedBy"]
+            ]
 
-    return {"success": True, "ticket": updated_ticket, "transition": f"{old_status} → {new_status}"}
+        result = {
+            "success": True,
+            "ticket": updated_ticket,
+            "transition": f"{old_status} → {new_status}",
+        }
+        if waiver and new_status == "done" and ticket.get("verifyCmd"):
+            result["waived"] = waiver
+        if ready:
+            result["ready_to_unblock"] = ready
+            result["hint"] = "All blockers resolved for these tickets — consider moving them to backlog or active."
+        return result
+
+    result = mutate_state(_apply)
+
+    # Bridge side-effects (outside the lock, only on a real transition)
+    if result.get("success"):
+        updated_ticket = captured["updated"]
+        old_status = captured["old"]
+        proj = captured["proj"]
+        state = captured["state"]
+        if new_status == "active" and old_status != "active":
+            _bridge_ticket_active(updated_ticket, proj, state)
+        elif new_status == "done" and old_status != "done":
+            _bridge_ticket_done(updated_ticket, proj, state)
+        else:
+            # Demotion (active → backlog/blocked): cancel the open timer —
+            # time spent sitting in the active column is not work.
+            if old_status == "active":
+                _bridge_ticket_demoted(updated_ticket, proj)
+            if new_status == "blocked":
+                _bridge_ticket_blocked(updated_ticket, proj, state)
+
+    return result
 
 
 @mcp.tool()
@@ -294,6 +375,7 @@ def edit_ticket(
     desc: Optional[str] = None,
     priority: Optional[str] = None,
     project: Optional[str] = None,
+    verify_cmd: Optional[str] = None,
 ) -> dict:
     """
     Edit a ticket's fields. Only provided fields are updated.
@@ -305,49 +387,235 @@ def edit_ticket(
         desc: New technical description.
         priority: New priority (critical, high, medium, low).
         project: Move ticket to a different project (name or ID).
+        verify_cmd: New verification command. Pass "" to remove the gate.
+                    Changing it clears any stored proof — proof belongs to the
+                    command that produced it.
     """
-    state = load_state()
-
-    ticket = None
-    for t in state["tickets"]:
-        if t["id"] == ticket_id:
-            ticket = t
-            break
-
-    if not ticket:
-        return {"error": f"Ticket '{ticket_id}' not found."}
-
     if priority and priority not in ("critical", "high", "medium", "low"):
         return {"error": f"Invalid priority '{priority}'."}
 
-    updates = {}
-    if title is not None:
-        updates["title"] = title
-    if why is not None:
-        updates["why"] = why
-    if desc is not None:
-        updates["desc"] = desc
-    if priority is not None:
-        updates["priority"] = priority
+    def _apply(state):
+        ticket = None
+        for t in state["tickets"]:
+            if t["id"] == ticket_id:
+                ticket = t
+                break
 
-    if project is not None:
-        proj = _resolve_project(state, project)
-        if not proj:
-            return {"error": f"Project '{project}' not found."}
-        updates["projectId"] = proj["id"]
+        if not ticket:
+            abort({"error": f"Ticket '{ticket_id}' not found."})
 
-    now_ms = int(time.time() * 1000)
-    changed_fields = ", ".join(updates.keys())
-    log_entry = {"t": now_ms, "msg": f"Edited: {changed_fields}"}
+        updates = {}
+        if title is not None:
+            updates["title"] = title
+        if why is not None:
+            updates["why"] = why
+        if desc is not None:
+            updates["desc"] = desc
+        if priority is not None:
+            updates["priority"] = priority
+        if verify_cmd is not None and verify_cmd != ticket.get("verifyCmd", ""):
+            updates["verifyCmd"] = verify_cmd
+            updates["verified"] = None
 
-    updated_ticket = {**ticket, **updates, "log": [*ticket["log"], log_entry]}
+        if project is not None:
+            proj = _resolve_project(state, project)
+            if not proj:
+                abort({"error": f"Project '{project}' not found."})
+            updates["projectId"] = proj["id"]
 
-    state["tickets"] = [
-        updated_ticket if t["id"] == ticket_id else t for t in state["tickets"]
+        now_ms = int(time.time() * 1000)
+        changed_fields = ", ".join(updates.keys())
+        log_entry = {"t": now_ms, "msg": f"Edited: {changed_fields}"}
+
+        updated_ticket = {**ticket, **updates, "log": [*ticket["log"], log_entry]}
+
+        state["tickets"] = [
+            updated_ticket if t["id"] == ticket_id else t for t in state["tickets"]
+        ]
+        return {"success": True, "ticket": updated_ticket}
+
+    return mutate_state(_apply)
+
+
+@mcp.tool()
+def get_ticket(ticket_id: str) -> dict:
+    """
+    Get full context for a single ticket: all fields, the complete work log,
+    and dependencies resolved to titles/statuses. Use this when picking up
+    work on a ticket to see its history and what it's waiting on / holding up.
+
+    Args:
+        ticket_id: The ticket ID (e.g. "T-001").
+    """
+    state = load_state()
+    ticket_map = {t["id"]: t for t in state["tickets"]}
+
+    ticket = ticket_map.get(ticket_id)
+    if not ticket:
+        return {"error": f"Ticket '{ticket_id}' not found."}
+
+    def _ref(tid: str) -> dict:
+        dep = ticket_map.get(tid)
+        if not dep:
+            return {"id": tid, "title": "(deleted)", "status": "unknown"}
+        return {"id": dep["id"], "title": dep["title"], "status": dep["status"]}
+
+    log = [
+        {**entry, "time": datetime.fromtimestamp(entry["t"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")}
+        for entry in ticket["log"]
     ]
-    save_state(state)
 
-    return {"success": True, "ticket": updated_ticket}
+    blocked_by = [_ref(tid) for tid in ticket["blockedBy"]]
+
+    return {
+        "ticket": {**ticket, "log": log},
+        "project": _project_name_by_id(state, ticket["projectId"]),
+        "blocked_by": blocked_by,
+        "blocks": [_ref(tid) for tid in ticket["blocksTickets"]],
+        "all_blockers_resolved": all(d["status"] == "done" for d in blocked_by),
+    }
+
+
+@mcp.tool()
+def log_work(ticket_id: str, note: str) -> dict:
+    """
+    Append a timestamped work note to a ticket's log. Use for progress updates,
+    findings, decisions, blockers hit, and session-handoff breadcrumbs — so the
+    next session can resume from the ticket itself via get_ticket.
+
+    Args:
+        ticket_id: The ticket ID (e.g. "T-001").
+        note: Free-text note. Concrete beats vague: file paths, what's done,
+              what's next, what failed.
+    """
+    if not note or not note.strip():
+        return {"error": "Note cannot be empty."}
+
+    def _apply(state):
+        ticket = None
+        for t in state["tickets"]:
+            if t["id"] == ticket_id:
+                ticket = t
+                break
+
+        if not ticket:
+            abort({"error": f"Ticket '{ticket_id}' not found."})
+
+        now_ms = int(time.time() * 1000)
+        entry = {"t": now_ms, "msg": note.strip()}
+        updated_ticket = {**ticket, "log": [*ticket["log"], entry]}
+
+        state["tickets"] = [
+            updated_ticket if t["id"] == ticket_id else t for t in state["tickets"]
+        ]
+        return {
+            "success": True,
+            "ticket_id": ticket_id,
+            "logged": entry,
+            "log_entries": len(updated_ticket["log"]),
+        }
+
+    return mutate_state(_apply)
+
+
+@mcp.tool()
+def verify_ticket(ticket_id: str) -> dict:
+    """
+    Run a ticket's verify_cmd and record the outcome as proof on the ticket.
+
+    Stores exit code, output tail, and the git revision the run happened on.
+    update_ticket_status(..., "done") consults that record: it requires exit 0
+    on the *current* HEAD, so a later commit invalidates the proof and the
+    command has to run again.
+
+    Args:
+        ticket_id: The ticket ID (e.g. "T-001").
+    """
+    state = load_state()
+    ticket = next((t for t in state["tickets"] if t["id"] == ticket_id), None)
+    if not ticket:
+        return {"error": f"Ticket '{ticket_id}' not found."}
+
+    cmd = (ticket.get("verifyCmd") or "").strip()
+    if not cmd:
+        return {
+            "error": f"{ticket_id} has no verify_cmd — nothing to run.",
+            "hint": f'Set one: edit_ticket("{ticket_id}", verify_cmd="pytest tests/... -q")',
+        }
+
+    proj = _find_project_by_id(state, ticket["projectId"])
+    repo = (proj or {}).get("repoPath") or ""
+    if not repo or not Path(repo).is_dir():
+        return {
+            "error": (
+                f"Project '{_project_name_by_id(state, ticket['projectId'])}' has no "
+                f"usable repoPath (got {repo!r}) — the verifier needs a working directory."
+            ),
+            "hint": "Set it in devflow_state.json, or recreate the project with repo_path=...",
+        }
+
+    timeout = load_config().get("verify_timeout_sec", 600)
+    rev = _git_rev(repo)
+    started = time.time()
+
+    # shell=True is deliberate: verify_cmd is an author-written command line
+    # ("pytest -q && ruff check ."), not user input, and this server is a
+    # local single-user tool whose caller already has shell access.
+    try:
+        proc = subprocess.run(
+            cmd, shell=True, cwd=repo, capture_output=True, text=True, timeout=timeout
+        )
+        exit_code = proc.returncode
+        output = (proc.stdout or "") + (proc.stderr or "")
+    except subprocess.TimeoutExpired:
+        exit_code = 124
+        output = f"verify_cmd exceeded verify_timeout_sec ({timeout}s) and was killed."
+    except OSError as e:
+        exit_code = 127
+        output = f"could not execute verify_cmd: {e}"
+
+    record = {
+        "t": int(time.time() * 1000),
+        "cmd": cmd,
+        "exit": exit_code,
+        "rev": rev,
+        "tail": _output_tail(output),
+        "durationSec": round(time.time() - started, 1),
+    }
+
+    def _apply(st):
+        t = next((x for x in st["tickets"] if x["id"] == ticket_id), None)
+        if not t:
+            abort({"error": f"Ticket '{ticket_id}' disappeared mid-verification."})
+        verdict = "passed" if exit_code == 0 else f"FAILED (exit {exit_code})"
+        entry = {
+            "t": record["t"],
+            "msg": f"Verification {verdict} on {rev or 'unknown rev'}: {record['tail'].splitlines()[-1] if record['tail'] else cmd}",
+        }
+        updated = {**t, "verified": record, "log": [*t["log"], entry]}
+        st["tickets"] = [updated if x["id"] == ticket_id else x for x in st["tickets"]]
+        return {"success": True}
+
+    stored = mutate_state(_apply)
+    if not stored.get("success"):
+        return stored
+
+    result = {
+        "ticket_id": ticket_id,
+        "passed": exit_code == 0,
+        "exit": exit_code,
+        "rev": rev,
+        "cmd": cmd,
+        "duration_sec": record["durationSec"],
+        "tail": record["tail"],
+    }
+    result["hint"] = (
+        f'Proof recorded. update_ticket_status("{ticket_id}", "done") will now pass '
+        f"while HEAD is {rev}."
+        if exit_code == 0
+        else "Verification failed — fix the work, then run verify_ticket again."
+    )
+    return result
 
 
 @mcp.tool()
@@ -358,33 +626,41 @@ def delete_ticket(ticket_id: str) -> dict:
     Args:
         ticket_id: The ticket ID to delete (e.g. "T-001").
     """
-    state = load_state()
+    captured = {}
 
-    ticket = None
-    for t in state["tickets"]:
-        if t["id"] == ticket_id:
-            ticket = t
-            break
+    def _apply(state):
+        ticket = None
+        for t in state["tickets"]:
+            if t["id"] == ticket_id:
+                ticket = t
+                break
 
-    if not ticket:
-        return {"error": f"Ticket '{ticket_id}' not found."}
+        if not ticket:
+            abort({"error": f"Ticket '{ticket_id}' not found."})
 
-    # Remove from other tickets' blockedBy and blocksTickets
-    cleaned_tickets = []
-    for t in state["tickets"]:
-        if t["id"] == ticket_id:
-            continue
-        t = {
-            **t,
-            "blockedBy": [bid for bid in t["blockedBy"] if bid != ticket_id],
-            "blocksTickets": [bid for bid in t["blocksTickets"] if bid != ticket_id],
-        }
-        cleaned_tickets.append(t)
+        # Remove from other tickets' blockedBy and blocksTickets
+        cleaned_tickets = []
+        for t in state["tickets"]:
+            if t["id"] == ticket_id:
+                continue
+            t = {
+                **t,
+                "blockedBy": [bid for bid in t["blockedBy"] if bid != ticket_id],
+                "blocksTickets": [bid for bid in t["blocksTickets"] if bid != ticket_id],
+            }
+            cleaned_tickets.append(t)
 
-    state["tickets"] = cleaned_tickets
-    save_state(state)
+        state["tickets"] = cleaned_tickets
+        captured.update(ticket=ticket, proj=_find_project_by_id(state, ticket["projectId"]))
+        return {"success": True, "deleted": ticket_id, "title": ticket["title"]}
 
-    return {"success": True, "deleted": ticket_id, "title": ticket["title"]}
+    result = mutate_state(_apply)
+
+    # Bridge: deleting an active ticket must not leave its timer running
+    if result.get("success") and captured["ticket"]["status"] == "active":
+        _bridge_ticket_demoted(captured["ticket"], captured["proj"])
+
+    return result
 
 
 @mcp.tool()
@@ -426,48 +702,61 @@ def add_dependency(ticket_id: str, blocked_by: str) -> dict:
         ticket_id: The ticket that becomes blocked (e.g. "T-005").
         blocked_by: The ticket that blocks it (e.g. "T-002").
     """
-    state = load_state()
-    ticket_map = {t["id"]: t for t in state["tickets"]}
+    captured = {}
 
-    if ticket_id not in ticket_map:
-        return {"error": f"Ticket '{ticket_id}' not found."}
-    if blocked_by not in ticket_map:
-        return {"error": f"Ticket '{blocked_by}' not found."}
-    if ticket_id == blocked_by:
-        return {"error": "A ticket cannot block itself."}
+    def _apply(state):
+        ticket_map = {t["id"]: t for t in state["tickets"]}
 
-    ticket = ticket_map[ticket_id]
-    blocker = ticket_map[blocked_by]
+        if ticket_id not in ticket_map:
+            abort({"error": f"Ticket '{ticket_id}' not found."})
+        if blocked_by not in ticket_map:
+            abort({"error": f"Ticket '{blocked_by}' not found."})
+        if ticket_id == blocked_by:
+            abort({"error": "A ticket cannot block itself."})
 
-    if blocked_by in ticket["blockedBy"]:
-        return {"info": f"{ticket_id} is already blocked by {blocked_by}."}
+        ticket = ticket_map[ticket_id]
+        blocker = ticket_map[blocked_by]
 
-    now_ms = int(time.time() * 1000)
+        if blocked_by in ticket["blockedBy"]:
+            abort({"info": f"{ticket_id} is already blocked by {blocked_by}."})
 
-    updated_ticket = {
-        **ticket,
-        "blockedBy": [*ticket["blockedBy"], blocked_by],
-        "log": [*ticket["log"], {"t": now_ms, "msg": f"Added dependency: blocked by {blocked_by}"}],
-    }
-    updated_blocker = {
-        **blocker,
-        "blocksTickets": [*blocker["blocksTickets"], ticket_id],
-    }
+        now_ms = int(time.time() * 1000)
 
-    state["tickets"] = [
-        updated_ticket if t["id"] == ticket_id
-        else updated_blocker if t["id"] == blocked_by
-        else t
-        for t in state["tickets"]
-    ]
-    save_state(state)
+        updated_ticket = {
+            **ticket,
+            "blockedBy": [*ticket["blockedBy"], blocked_by],
+            "log": [*ticket["log"], {"t": now_ms, "msg": f"Added dependency: blocked by {blocked_by}"}],
+        }
+        updated_blocker = {
+            **blocker,
+            "blocksTickets": [*blocker["blocksTickets"], ticket_id],
+        }
 
-    # Bridge: cross-project blocking
-    if updated_ticket["projectId"] != updated_blocker["projectId"]:
-        proj = _find_project_by_id(state, updated_ticket["projectId"])
-        _bridge_ticket_blocked(updated_ticket, proj, state)
+        state["tickets"] = [
+            updated_ticket if t["id"] == ticket_id
+            else updated_blocker if t["id"] == blocked_by
+            else t
+            for t in state["tickets"]
+        ]
+        captured.update(ticket=updated_ticket, blocker=updated_blocker, state=state)
+        return {
+            "success": True,
+            "ticket_id": ticket_id,
+            "now_blocked_by": updated_ticket["blockedBy"],
+        }
 
-    return {"success": True, "ticket_id": ticket_id, "now_blocked_by": updated_ticket["blockedBy"]}
+    result = mutate_state(_apply)
+
+    # Bridge: cross-project blocking (outside the lock, only on success)
+    if result.get("success"):
+        updated_ticket = captured["ticket"]
+        updated_blocker = captured["blocker"]
+        state = captured["state"]
+        if updated_ticket["projectId"] != updated_blocker["projectId"]:
+            proj = _find_project_by_id(state, updated_ticket["projectId"])
+            _bridge_ticket_blocked(updated_ticket, proj, state)
+
+    return result
 
 
 @mcp.tool()
@@ -479,43 +768,44 @@ def remove_dependency(ticket_id: str, blocked_by: str) -> dict:
         ticket_id: The ticket to unblock (e.g. "T-005").
         blocked_by: The blocker ticket to remove (e.g. "T-002").
     """
-    state = load_state()
-    ticket_map = {t["id"]: t for t in state["tickets"]}
 
-    if ticket_id not in ticket_map:
-        return {"error": f"Ticket '{ticket_id}' not found."}
+    def _apply(state):
+        ticket_map = {t["id"]: t for t in state["tickets"]}
 
-    ticket = ticket_map[ticket_id]
+        if ticket_id not in ticket_map:
+            abort({"error": f"Ticket '{ticket_id}' not found."})
 
-    if blocked_by not in ticket["blockedBy"]:
-        return {"info": f"{ticket_id} is not blocked by {blocked_by}."}
+        ticket = ticket_map[ticket_id]
 
-    now_ms = int(time.time() * 1000)
+        if blocked_by not in ticket["blockedBy"]:
+            abort({"info": f"{ticket_id} is not blocked by {blocked_by}."})
 
-    updated_ticket = {
-        **ticket,
-        "blockedBy": [bid for bid in ticket["blockedBy"] if bid != blocked_by],
-        "log": [*ticket["log"], {"t": now_ms, "msg": f"Removed dependency: {blocked_by}"}],
-    }
+        now_ms = int(time.time() * 1000)
 
-    # Update blocker's blocksTickets
-    blocker = ticket_map.get(blocked_by)
-    updated_blocker = None
-    if blocker:
-        updated_blocker = {
-            **blocker,
-            "blocksTickets": [bid for bid in blocker["blocksTickets"] if bid != ticket_id],
+        updated_ticket = {
+            **ticket,
+            "blockedBy": [bid for bid in ticket["blockedBy"] if bid != blocked_by],
+            "log": [*ticket["log"], {"t": now_ms, "msg": f"Removed dependency: {blocked_by}"}],
         }
 
-    state["tickets"] = [
-        updated_ticket if t["id"] == ticket_id
-        else updated_blocker if updated_blocker and t["id"] == blocked_by
-        else t
-        for t in state["tickets"]
-    ]
-    save_state(state)
+        # Update blocker's blocksTickets
+        blocker = ticket_map.get(blocked_by)
+        updated_blocker = None
+        if blocker:
+            updated_blocker = {
+                **blocker,
+                "blocksTickets": [bid for bid in blocker["blocksTickets"] if bid != ticket_id],
+            }
 
-    return {"success": True, "ticket_id": ticket_id, "blocked_by": updated_ticket["blockedBy"]}
+        state["tickets"] = [
+            updated_ticket if t["id"] == ticket_id
+            else updated_blocker if updated_blocker and t["id"] == blocked_by
+            else t
+            for t in state["tickets"]
+        ]
+        return {"success": True, "ticket_id": ticket_id, "blocked_by": updated_ticket["blockedBy"]}
+
+    return mutate_state(_apply)
 
 
 @mcp.tool()
@@ -526,27 +816,36 @@ def archive_project(project: str) -> dict:
     Args:
         project: Project name or ID to archive.
     """
-    state = load_state()
+    captured = {}
 
-    proj = _resolve_project(state, project)
-    if not proj:
-        return {"error": f"Project '{project}' not found."}
+    def _apply(state):
+        proj = _resolve_project(state, project)
+        if not proj:
+            abort({"error": f"Project '{project}' not found."})
 
-    # Count open tickets
-    open_tickets = [
-        t for t in state["tickets"]
-        if t["projectId"] == proj["id"] and t["status"] != "done"
-    ]
-    if open_tickets:
-        return {
-            "error": f"Cannot archive — {len(open_tickets)} tickets still open.",
-            "open_tickets": [{"id": t["id"], "title": t["title"], "status": t["status"]} for t in open_tickets],
-        }
+        # Count open tickets
+        open_tickets = [
+            t for t in state["tickets"]
+            if t["projectId"] == proj["id"] and t["status"] != "done"
+        ]
+        if open_tickets:
+            abort({
+                "error": f"Cannot archive — {len(open_tickets)} tickets still open.",
+                "open_tickets": [{"id": t["id"], "title": t["title"], "status": t["status"]} for t in open_tickets],
+            })
 
-    # Remove project and its tickets from DevFlow
-    state["projects"] = [p for p in state["projects"] if p["id"] != proj["id"]]
-    state["tickets"] = [t for t in state["tickets"] if t["projectId"] != proj["id"]]
-    save_state(state)
+        # Remove project and its tickets from DevFlow
+        state["projects"] = [p for p in state["projects"] if p["id"] != proj["id"]]
+        state["tickets"] = [t for t in state["tickets"] if t["projectId"] != proj["id"]]
+        captured["proj"] = proj
+        return {"success": True, "archived": proj["name"]}
+
+    result = mutate_state(_apply)
+
+    if not result.get("success"):
+        return result
+
+    proj = captured["proj"]
 
     # Bridge: mark completed in ProjectHub
     bridge = get_bridge()
@@ -677,6 +976,62 @@ def get_status_report() -> dict:
     for t in state["tickets"]:
         status_counts[t["status"]] = status_counts.get(t["status"], 0) + 1
 
+    # Ticket hygiene: stale actives + WIP ceiling
+    config = load_config()
+    stale_days = config.get("stale_active_days", 14)
+    wip_limit = config.get("wip_limit", 10)
+    now_ms = int(time.time() * 1000)
+
+    stale_active = []
+    for t in state["tickets"]:
+        if t["status"] != "active":
+            continue
+        days_idle = (now_ms - _last_activity_ms(t)) // 86_400_000
+        if days_idle >= stale_days:
+            stale_active.append({
+                "id": t["id"],
+                "title": t["title"],
+                "project": _project_name_by_id(state, t["projectId"]),
+                "days_idle": days_idle,
+            })
+    stale_active.sort(key=lambda x: -x["days_idle"])
+
+    wip_warning = None
+    if status_counts["active"] > wip_limit:
+        wip_warning = (
+            f"{status_counts['active']} active tickets (limit {wip_limit}). "
+            "Demote stalled ones to backlog — an active column this wide tracks nothing."
+        )
+
+    # Blocked tickets whose blockers are all done
+    ready_to_unblock = [
+        {
+            "id": t["id"],
+            "title": t["title"],
+            "project": _project_name_by_id(state, t["projectId"]),
+            "resolved_blockers": t["blockedBy"],
+        }
+        for t in _ready_to_unblock(state)
+    ]
+
+    # Gated tickets with no green run yet. Deliberately does not shell out to
+    # git for staleness — this report runs at every session start, and a stale
+    # revision is caught at the 'done' transition anyway.
+    needs_verification = []
+    for t in state["tickets"]:
+        if t["status"] not in ("active", "blocked") or not t.get("verifyCmd"):
+            continue
+        v = t.get("verified")
+        if v and v.get("exit") == 0:
+            continue
+        needs_verification.append({
+            "id": t["id"],
+            "title": t["title"],
+            "project": _project_name_by_id(state, t["projectId"]),
+            "verify_cmd": t["verifyCmd"],
+            "last_exit": v.get("exit") if v else None,
+        })
+
     # Portfolio health (from bridge if available)
     portfolio_alerts = []
     bridge = get_bridge()
@@ -688,9 +1043,45 @@ def get_status_report() -> dict:
         "project_count": len(state["projects"]),
         "blocked": blocked,
         "active": active,
+        "ready_to_unblock": ready_to_unblock,
+        "stale_active": stale_active,
+        "needs_verification": needs_verification,
+        "wip_warning": wip_warning,
         "dependency_chains": chains,
         "portfolio_alerts": portfolio_alerts,
+        "adr_health": _adr_health_summary(),
     }
+
+
+def _adr_health_summary() -> dict:
+    """Decision-side health, folded into the status report.
+
+    Tickets answer "what am I doing"; ADRs answer "what did I decide and did
+    it ever get done". A proposal sitting untouched for months, or an ADR
+    pointing at a deleted ticket, is invisible from the ticket board alone.
+    Degrades quietly when the index has not been built.
+    """
+    try:
+        from adr_index import load_index
+        index = load_index()
+        if not index:
+            return {"available": False, "reason": "index not built — run refresh_adr_index()"}
+        h = index["health"]
+        return {
+            "available": True,
+            "generated": index.get("generated", ""),
+            "total_adrs": index["counts"]["adrs"],
+            "adrs_without_tickets": len(h["adrsWithoutTickets"]),
+            "stale_proposals": h["staleProposals"][:5],
+            "orphan_ticket_refs": h["orphanTicketRefs"][:5],
+            "number_collisions": len(h["numberCollisions"]),
+            "repos_without_devflow_project": [
+                r["repo"] for r in h["reposWithoutDevflowProject"]
+            ],
+            "unconfirmed_categories": h["unconfirmedCategories"],
+        }
+    except Exception as exc:
+        return {"available": False, "reason": str(exc)}
 
 
 # ── Tier 4: Manifest Ingestion ─────────────────────────────────────────────────
@@ -725,73 +1116,83 @@ def ingest_manifest(path: str) -> dict:
     if not project_name:
         return {"error": "Manifest missing 'project' field"}
 
-    state = load_state()
+    captured = {}
 
-    # Create project if it doesn't exist
-    proj = _resolve_project(state, project_name)
-    if not proj:
-        project_id = f"proj-{project_name.lower().replace(' ', '_')}"
-        proj = {
-            "id": project_id,
-            "name": project_name,
-            "goal": goal,
-            "color": manifest.get("color", "#4f7cff"),
+    def _apply(state):
+        # Create project if it doesn't exist
+        proj = _resolve_project(state, project_name)
+        if not proj:
+            project_id = f"proj-{project_name.lower().replace(' ', '_')}"
+            proj = {
+                "id": project_id,
+                "name": project_name,
+                "goal": goal,
+                "color": manifest.get("color", "#4f7cff"),
+            }
+            state["projects"] = [*state["projects"], proj]
+            captured["new_project"] = True
+
+        # Get existing ticket titles for this project to avoid duplicates
+        existing_titles = {
+            t["title"]
+            for t in state["tickets"]
+            if t["projectId"] == proj["id"]
         }
-        state["projects"] = [*state["projects"], proj]
 
-        # Bridge: upsert into ProjectHub
+        created = []
+        skipped = []
+
+        for td in tickets_data:
+            title = td.get("title", "")
+            if not title:
+                continue
+
+            if title in existing_titles:
+                skipped.append(title)
+                continue
+
+            ticket_id = next_ticket_id(state)
+            now_ms = int(time.time() * 1000)
+
+            blocked_by = td.get("blockedBy", [])
+            ticket = {
+                "id": ticket_id,
+                "title": title,
+                "why": td.get("why", ""),
+                "desc": td.get("desc", ""),
+                "projectId": proj["id"],
+                "priority": td.get("priority", "medium"),
+                "status": td.get("status", "backlog"),
+                "blockedBy": blocked_by,
+                "blocksTickets": [],
+                "created": now_ms,
+                "log": [{"t": now_ms, "msg": f"Ticket created from manifest: {path}"}],
+            }
+
+            # Update reverse dependencies
+            updated_tickets = []
+            for t in state["tickets"]:
+                if t["id"] in blocked_by:
+                    t = {**t, "blocksTickets": [*t["blocksTickets"], ticket_id]}
+                updated_tickets.append(t)
+            state["tickets"] = [*updated_tickets, ticket]
+
+            created.append({"id": ticket_id, "title": title})
+
+        captured.update(proj=proj, created=created, skipped=skipped)
+        return None
+
+    mutate_state(_apply)
+
+    proj = captured["proj"]
+    created = captured["created"]
+    skipped = captured["skipped"]
+
+    # Bridge: upsert into ProjectHub (outside the lock) if a project was created
+    if captured.get("new_project"):
         bridge = get_bridge()
         if bridge:
             bridge.upsert_project(project_name, goal)
-
-    # Get existing ticket titles for this project to avoid duplicates
-    existing_titles = {
-        t["title"]
-        for t in state["tickets"]
-        if t["projectId"] == proj["id"]
-    }
-
-    created = []
-    skipped = []
-
-    for td in tickets_data:
-        title = td.get("title", "")
-        if not title:
-            continue
-
-        if title in existing_titles:
-            skipped.append(title)
-            continue
-
-        ticket_id = next_ticket_id(state)
-        now_ms = int(time.time() * 1000)
-
-        blocked_by = td.get("blockedBy", [])
-        ticket = {
-            "id": ticket_id,
-            "title": title,
-            "why": td.get("why", ""),
-            "desc": td.get("desc", ""),
-            "projectId": proj["id"],
-            "priority": td.get("priority", "medium"),
-            "status": td.get("status", "backlog"),
-            "blockedBy": blocked_by,
-            "blocksTickets": [],
-            "created": now_ms,
-            "log": [{"t": now_ms, "msg": f"Ticket created from manifest: {path}"}],
-        }
-
-        # Update reverse dependencies
-        updated_tickets = []
-        for t in state["tickets"]:
-            if t["id"] in blocked_by:
-                t = {**t, "blocksTickets": [*t["blocksTickets"], ticket_id]}
-            updated_tickets.append(t)
-        state["tickets"] = [*updated_tickets, ticket]
-
-        created.append({"id": ticket_id, "title": title})
-
-    save_state(state)
 
     return {
         "success": True,
@@ -814,132 +1215,160 @@ def scan_project(
     include_completed: bool = False,
 ) -> dict:
     """
-    Scan a project's docs/project_notes/decisions.md for ADRs with outstanding
-    work, cross-reference against existing DevFlow tickets, and report (or
-    create) missing tickets.
+    Scan a project's ADRs for outstanding work, cross-reference against
+    existing DevFlow tickets, and report (or create) missing tickets.
+
+    Reads either the split layout (docs/project_notes/decisions/ADR-*.md, one
+    ADR per file) or the legacy single docs/project_notes/decisions.md. The
+    split layout wins when both are present, because decisions.md is then a
+    generated index whose table rows carry no ADR bodies.
 
     Args:
-        path: Absolute path to the project root directory (must contain docs/project_notes/decisions.md).
+        path: Absolute path to the project root directory (must contain either
+            docs/project_notes/decisions/ or docs/project_notes/decisions.md).
         project: DevFlow project name or ID. If omitted, inferred from the directory name.
         dry_run: If True (default), report proposed tickets without creating them. Set False to create.
         include_completed: If True, also create tickets for implemented ADRs (status=done). Gives full ADR visibility in the kanban.
     """
     project_dir = Path(path)
-    decisions_file = project_dir / "docs" / "project_notes" / "decisions.md"
+    loaded = _load_decisions(project_dir)
 
-    if not decisions_file.exists():
-        return {"error": f"No decisions.md found at {decisions_file}"}
-
-    # Resolve project
-    project_name = project or project_dir.name
-    state = load_state()
-    proj = _resolve_project(state, project_name)
-
-    if not proj and not dry_run:
+    if loaded is None:
+        notes_dir = project_dir / "docs" / "project_notes"
         return {
-            "error": f"Project '{project_name}' not found in DevFlow. Create it first or use dry_run=True.",
+            "error": f"No ADRs found under {notes_dir} "
+                     "(looked for decisions/ADR-*.md, then decisions.md)"
         }
 
-    # Parse ADRs
-    with open(decisions_file) as f:
-        content = f.read()
+    content, decisions_file = loaded
+
+    project_name = project or project_dir.name
 
     adrs = _parse_adrs(content)
 
     # Classify each ADR as outstanding or completed
     outstanding_ids = {adr["id"] for adr in adrs if _has_outstanding_work(adr)}
 
-    # Cross-reference against existing tickets
-    existing_titles = set()
-    if proj:
-        existing_titles = {
-            t["title"]
-            for t in state["tickets"]
-            if t["projectId"] == proj["id"]
-        }
+    def _compute(state):
+        """Cross-reference ADRs against the given state → (missing, already_tracked)."""
+        proj = _resolve_project(state, project_name)
 
-    # Check ALL projects' tickets for ADR references — an ADR tracked under
-    # a different DevFlow project still counts as covered.
-    existing_adr_refs = set()
-    for t in state["tickets"]:
-        for adr in adrs:
-            if adr["id"] in t["title"]:
-                existing_adr_refs.add(adr["id"])
-
-    # Determine which ADRs to process
-    adrs_to_process = adrs if include_completed else [a for a in adrs if a["id"] in outstanding_ids]
-
-    missing = []
-    already_tracked = []
-
-    for adr in adrs_to_process:
-        proposed_title = f"{adr['id']}: {adr['title']}"
-        is_outstanding = adr["id"] in outstanding_ids
-
-        # Check if already tracked by exact title or ADR ID reference
-        if proposed_title in existing_titles or adr["id"] in existing_adr_refs:
-            already_tracked.append({
-                "adr": adr["id"],
-                "title": adr["title"],
-                "reason": "Existing ticket references this ADR",
-            })
-            continue
-
-        why = _extract_why(adr)
-        desc = _extract_outstanding_work(adr) if is_outstanding else adr["sections"].get("decision", adr["sections"].get("context", ""))
-        # Truncate long completed ADR descriptions
-        if not is_outstanding and len(desc) > 500:
-            desc = desc[:497] + "..."
-
-        missing.append({
-            "adr": adr["id"],
-            "title": proposed_title,
-            "why": why,
-            "desc": desc,
-            "date": adr.get("date", ""),
-            "status": "backlog" if is_outstanding else "done",
-        })
-
-    # Create tickets if not dry_run
-    created = []
-    if not dry_run and proj and missing:
-        for item in missing:
-            ticket_id = next_ticket_id(state)
-            now_ms = int(time.time() * 1000)
-
-            status = item["status"]
-            log_msg = f"Auto-created by scan_project from {decisions_file}"
-            log_entries = [{"t": now_ms, "msg": log_msg}]
-            if status == "done":
-                log_entries.append({"t": now_ms, "msg": "Status: backlog → done (implemented ADR)"})
-
-            ticket = {
-                "id": ticket_id,
-                "title": item["title"],
-                "why": item["why"],
-                "desc": item["desc"],
-                "projectId": proj["id"],
-                "priority": "medium",
-                "status": status,
-                "blockedBy": [],
-                "blocksTickets": [],
-                "created": now_ms,
-                "log": log_entries,
+        existing_titles = set()
+        if proj:
+            existing_titles = {
+                t["title"]
+                for t in state["tickets"]
+                if t["projectId"] == proj["id"]
             }
-            state["tickets"] = [*state["tickets"], ticket]
-            created.append({
-                "id": ticket_id,
-                "adr": item["adr"],
-                "title": item["title"],
-                "status": status,
+
+        # Check ALL projects' tickets for ADR references — an ADR tracked under
+        # a different DevFlow project still counts as covered.
+        existing_adr_refs = set()
+        for t in state["tickets"]:
+            for adr in adrs:
+                if adr["id"] in t["title"]:
+                    existing_adr_refs.add(adr["id"])
+
+        adrs_to_process = adrs if include_completed else [a for a in adrs if a["id"] in outstanding_ids]
+
+        missing = []
+        already_tracked = []
+
+        for adr in adrs_to_process:
+            proposed_title = f"{adr['id']}: {adr['title']}"
+            is_outstanding = adr["id"] in outstanding_ids
+
+            if proposed_title in existing_titles or adr["id"] in existing_adr_refs:
+                already_tracked.append({
+                    "adr": adr["id"],
+                    "title": adr["title"],
+                    "reason": "Existing ticket references this ADR",
+                })
+                continue
+
+            why = _extract_why(adr)
+            desc = _extract_outstanding_work(adr) if is_outstanding else adr["sections"].get("decision", adr["sections"].get("context", ""))
+            if not is_outstanding and len(desc) > 500:
+                desc = desc[:497] + "..."
+
+            missing.append({
+                "adr": adr["id"],
+                "title": proposed_title,
+                "why": why,
+                "desc": desc,
+                "date": adr.get("date", ""),
+                "status": "backlog" if is_outstanding else "done",
             })
 
-        save_state(state)
+        return proj, missing, already_tracked
 
-        # Bridge: upsert project in ProjectHub
-        bridge = get_bridge()
-        if bridge and proj:
-            bridge.upsert_project(proj["name"], proj.get("goal", ""))
+    created = []
+
+    if dry_run:
+        # Read-only path — no lock/write needed.
+        proj, missing, already_tracked = _compute(read_state())
+    else:
+        captured = {}
+
+        def _apply(state):
+            proj = _resolve_project(state, project_name)
+            if not proj:
+                abort({
+                    "error": f"Project '{project_name}' not found in DevFlow. Create it first or use dry_run=True.",
+                })
+
+            # Re-compute against the freshly-read state inside the lock.
+            _, missing, already_tracked = _compute(state)
+
+            local_created = []
+            for item in missing:
+                ticket_id = next_ticket_id(state)
+                now_ms = int(time.time() * 1000)
+
+                status = item["status"]
+                log_msg = f"Auto-created by scan_project from {decisions_file}"
+                log_entries = [{"t": now_ms, "msg": log_msg}]
+                if status == "done":
+                    log_entries.append({"t": now_ms, "msg": "Status: backlog → done (implemented ADR)"})
+
+                ticket = {
+                    "id": ticket_id,
+                    "title": item["title"],
+                    "why": item["why"],
+                    "desc": item["desc"],
+                    "projectId": proj["id"],
+                    "priority": "medium",
+                    "status": status,
+                    "blockedBy": [],
+                    "blocksTickets": [],
+                    "created": now_ms,
+                    "log": log_entries,
+                }
+                state["tickets"] = [*state["tickets"], ticket]
+                local_created.append({
+                    "id": ticket_id,
+                    "adr": item["adr"],
+                    "title": item["title"],
+                    "status": status,
+                })
+
+            captured.update(proj=proj, created=local_created, missing=missing, already_tracked=already_tracked)
+            return None
+
+        result = mutate_state(_apply)
+        if isinstance(result, dict) and "error" in result:
+            return result
+
+        proj = captured["proj"]
+        created = captured["created"]
+        missing = captured["missing"]
+        already_tracked = captured["already_tracked"]
+
+        # Bridge: upsert project in ProjectHub (outside the lock)
+        if created:
+            bridge = get_bridge()
+            if bridge and proj:
+                bridge.upsert_project(proj["name"], proj.get("goal", ""))
 
     return {
         "project": project_name,
@@ -954,70 +1383,6 @@ def scan_project(
         "created_tickets": created,
         "already_tracked_details": already_tracked,
     }
-
-
-def _parse_adrs(content: str) -> list[dict]:
-    """Parse ADR entries from a decisions.md file."""
-    adr_pattern = re.compile(
-        r"^#{2,3} (ADR-\d+|ADR-XXX): (.+?)(?:\s*\((\d{4}-\d{2}-\d{2})\))?\s*$",
-        re.MULTILINE,
-    )
-
-    matches = list(adr_pattern.finditer(content))
-    adrs = []
-
-    for i, match in enumerate(matches):
-        adr_id = match.group(1)
-        title = match.group(2).strip()
-        date = match.group(3) or ""
-
-        # Skip the template entry
-        if adr_id == "ADR-XXX":
-            continue
-
-        # Extract body until next ADR or end of file
-        start = match.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
-        body = content[start:end].strip()
-
-        # Parse sections
-        sections = _parse_adr_sections(body)
-
-        # Fall back to **Date**: field if header didn't have a date
-        if not date and "date" in sections:
-            date_match = re.search(r"\d{4}-\d{2}-\d{2}", sections["date"])
-            if date_match:
-                date = date_match.group(0)
-
-        adrs.append({
-            "id": adr_id,
-            "title": title,
-            "date": date,
-            "body": body,
-            "sections": sections,
-        })
-
-    return adrs
-
-
-def _parse_adr_sections(body: str) -> dict[str, str]:
-    """Split an ADR body into named sections. Handles both **Bold:** and ### Header styles."""
-    # Match **Bold:** markers OR ### subsection headers
-    section_pattern = re.compile(
-        r"(?:^\*\*(.+?):?\*\*\s*$|^### (.+?)\s*$)",
-        re.MULTILINE,
-    )
-    matches = list(section_pattern.finditer(body))
-    sections = {}
-
-    for i, match in enumerate(matches):
-        # group(1) is **Bold**, group(2) is ### Header
-        name = (match.group(1) or match.group(2)).strip().rstrip(":")
-        start = match.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
-        sections[name.lower()] = body[start:end].strip()
-
-    return sections
 
 
 def _has_outstanding_work(adr: dict) -> bool:
@@ -1129,6 +1494,87 @@ def _extract_outstanding_work(adr: dict) -> str:
 # ── Helper Functions ───────────────────────────────────────────────────────────
 
 
+def _git_rev(repo: str) -> Optional[str]:
+    """Short HEAD sha for `repo`, or None if it isn't a git checkout.
+
+    None is a valid answer, not an error: a project can be a plain directory.
+    Callers must degrade to "no staleness check" rather than blocking on it.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+_TAIL_LINES = 20
+_TAIL_CHARS = 2000
+
+
+def _output_tail(output: str) -> str:
+    """Last few lines of a verify run — enough to see the failure, not the suite."""
+    lines = [ln for ln in (output or "").splitlines() if ln.strip()]
+    tail = "\n".join(lines[-_TAIL_LINES:])
+    if len(tail) > _TAIL_CHARS:
+        tail = "…" + tail[-_TAIL_CHARS:]
+    return tail
+
+
+def _verification_gate(ticket_id: str) -> Optional[dict]:
+    """Refuse a 'done' transition when the ticket's verify_cmd hasn't earned it.
+
+    Returns an error dict to block with, or None to allow. Shells out to git,
+    so callers must invoke it OUTSIDE the state lock.
+    """
+    state = load_state()
+    ticket = next((t for t in state["tickets"] if t["id"] == ticket_id), None)
+    if not ticket:
+        return None  # let the mutator raise the canonical "not found"
+
+    cmd = (ticket.get("verifyCmd") or "").strip()
+    if not cmd:
+        return None  # no gate declared — unchanged behaviour
+
+    waive = f'Or close it anyway: update_ticket_status("{ticket_id}", "done", waiver="<reason>")'
+    v = ticket.get("verified")
+    if not v:
+        return {
+            "error": f"{ticket_id} needs verification before it can be done.",
+            "verify_cmd": cmd,
+            "hint": f'Run verify_ticket("{ticket_id}") first. {waive}',
+        }
+
+    if v.get("exit") != 0:
+        return {
+            "error": f"{ticket_id} last failed verification (exit {v.get('exit')}).",
+            "verify_cmd": cmd,
+            "tail": v.get("tail", ""),
+            "hint": f"Fix the work, then run verify_ticket. {waive}",
+        }
+
+    proj = _find_project_by_id(state, ticket["projectId"])
+    repo = (proj or {}).get("repoPath") or ""
+    current = _git_rev(repo) if repo and Path(repo).is_dir() else None
+    if current and v.get("rev") and v["rev"] != current:
+        return {
+            "error": (
+                f"{ticket_id} proof is stale: it passed on {v['rev']}, HEAD is now {current}."
+            ),
+            "verify_cmd": cmd,
+            "hint": f'Re-run verify_ticket("{ticket_id}"). {waive}',
+        }
+
+    return None
+
+
 def _resolve_project(state: dict, identifier: str) -> Optional[dict]:
     """Find a project by name or ID."""
     for p in state["projects"]:
@@ -1147,6 +1593,30 @@ def _find_project_by_id(state: dict, project_id: str) -> Optional[dict]:
 def _project_name_by_id(state: dict, project_id: str) -> str:
     proj = _find_project_by_id(state, project_id)
     return proj["name"] if proj else project_id
+
+
+def _last_activity_ms(ticket: dict) -> int:
+    """Timestamp of the ticket's most recent log entry (or creation)."""
+    if ticket.get("log"):
+        return max(e["t"] for e in ticket["log"])
+    return ticket["created"]
+
+
+def _ready_to_unblock(state: dict) -> list[dict]:
+    """Blocked tickets whose blockers are all done. Excludes externally-blocked
+    tickets (empty blockedBy) — those need human judgment, not a status flip."""
+    ticket_map = {t["id"]: t for t in state["tickets"]}
+    return [
+        t
+        for t in state["tickets"]
+        if t["status"] == "blocked"
+        and t["blockedBy"]
+        and all(
+            ticket_map[d]["status"] == "done"
+            for d in t["blockedBy"]
+            if d in ticket_map
+        )
+    ]
 
 
 def _build_dependency_chains(state: dict) -> list[dict]:
@@ -1215,6 +1685,17 @@ def _bridge_ticket_done(ticket: dict, proj: Optional[dict], state: dict) -> None
         bridge.update_project_progress(proj["name"], progress)
 
 
+def _bridge_ticket_demoted(ticket: dict, proj: Optional[dict]) -> None:
+    """Side-effect: active ticket demoted or deleted → cancel its open timer
+    (close without billing elapsed time)."""
+    bridge = get_bridge()
+    if not bridge or not proj:
+        return
+    config = load_config()
+    if config.get("auto_time_entries"):
+        bridge.cancel_time_entry(proj["name"], ticket["title"])
+
+
 def _bridge_ticket_blocked(ticket: dict, proj: Optional[dict], state: dict) -> None:
     """Side-effect: cross-project blocking → create project dependency."""
     bridge = get_bridge()
@@ -1231,6 +1712,166 @@ def _bridge_ticket_blocked(ticket: dict, proj: Optional[dict], state: dict) -> N
                     source_project=proj["name"],
                     target_project=blocker_proj["name"],
                 )
+
+
+# ── ADR Index ──────────────────────────────────────────────────────────────────
+#
+# Read-only view over every repo's decisions.md. The index itself is built by
+# adr_index.py and cached in adr_index.json; nothing here touches ticket state.
+
+
+@mcp.tool()
+def list_adrs(
+    project: Optional[str] = None,
+    layer: Optional[str] = None,
+    domain: Optional[str] = None,
+    status: Optional[str] = None,
+    has_ticket: Optional[bool] = None,
+    limit: int = 60,
+) -> dict:
+    """
+    List Architecture Decision Records across all indexed repos, optionally filtered.
+
+    ADR numbers repeat across projects (every repo restarts at ADR-001), so each
+    record carries a collision-proof `uid` of the form "<project>:ADR-NNN". Use
+    the uid, not the bare ADR number, when referring to one.
+
+    Args:
+        project: Filter by DevFlow project name/ID or repo directory name.
+        layer: Filter by layer (ui, chatbot, agentic, etl, datasets,
+            plugins-engines, infra, security, ops).
+        domain: Filter by domain (homelab, platform-kernel, kbvault,
+            clutch-openclaw, alberta-market, nerc, pediatrica, consulting,
+            personal-automation, harness, modelling).
+        status: Filter by status (accepted, implemented, proposed, deferred,
+            superseded, rejected).
+        has_ticket: True for ADRs with linked DevFlow tickets, False for those without.
+        limit: Maximum records to return (default 60).
+    """
+    from adr_index import load_index
+
+    index = load_index()
+    if not index:
+        return {"error": "ADR index not built. Run refresh_adr_index() first.", "adrs": []}
+
+    adrs = index["adrs"]
+
+    if project:
+        needle = re.sub(r"[^a-z0-9]", "", project.lower())
+        adrs = [
+            a for a in adrs
+            if needle in re.sub(r"[^a-z0-9]", "", a["project"].lower())
+            or needle in re.sub(r"[^a-z0-9]", "", a["repoName"].lower())
+        ]
+    if layer:
+        adrs = [a for a in adrs if a["layer"] == layer]
+    if domain:
+        adrs = [a for a in adrs if a["domain"] == domain]
+    if status:
+        adrs = [a for a in adrs if a["status"] == status]
+    if has_ticket is not None:
+        adrs = [a for a in adrs if bool(a["tickets"]) == has_ticket]
+
+    total = len(adrs)
+    # Newest first; undated ADRs sort last rather than leading the list.
+    adrs = sorted(adrs, key=lambda a: (a["date"] or "0000", a["adrNum"]), reverse=True)
+
+    # Strip section bodies — they are large and the caller can fetch one ADR in
+    # full from the index when it actually needs the prose.
+    slim = [
+        {k: v for k, v in a.items() if k != "sections"}
+        for a in adrs[:limit]
+    ]
+
+    return {
+        "count": total,
+        "returned": len(slim),
+        "generated": index.get("generated", ""),
+        "adrs": slim,
+    }
+
+
+@mcp.tool()
+def refresh_adr_index() -> dict:
+    """
+    Rebuild the ADR index by re-reading every repo's decisions.md.
+
+    Run this after writing a new ADR. Reads only; never modifies ticket state.
+    Returns per-repo counts plus the health report (ADRs with no ticket, stale
+    proposals, orphan ticket references, and ADR-number collisions).
+    """
+    from adr_index import build, write_index
+
+    index = build(verbose=False)
+    path = write_index(index)
+
+    health = index["health"]
+    return {
+        "success": True,
+        "path": str(path),
+        "generated": index["generated"],
+        "counts": index["counts"],
+        "health_summary": {
+            "adrs_without_tickets": len(health["adrsWithoutTickets"]),
+            "stale_proposals": len(health["staleProposals"]),
+            "orphan_ticket_refs": len(health["orphanTicketRefs"]),
+            "number_collisions": len(health["numberCollisions"]),
+            "repos_without_devflow_project": len(health["reposWithoutDevflowProject"]),
+            "unconfirmed_categories": health["unconfirmedCategories"],
+        },
+    }
+
+
+@mcp.tool()
+def get_adr(uid: str) -> dict:
+    """
+    Get one ADR in full, including its section prose, edges, and linked tickets.
+
+    Args:
+        uid: The ADR's unique id, e.g. "proj-homelab_gitops:ADR-057". A bare
+            "ADR-057" is accepted but will error if it is ambiguous across repos.
+    """
+    from adr_index import load_index
+
+    index = load_index()
+    if not index:
+        return {"error": "ADR index not built. Run refresh_adr_index() first."}
+
+    matches = [a for a in index["adrs"] if a["uid"] == uid]
+    if not matches:
+        matches = [a for a in index["adrs"] if a["adrId"] == uid]
+        if len(matches) > 1:
+            return {
+                "error": f"'{uid}' is ambiguous across {len(matches)} repos. Use a full uid.",
+                "candidates": [
+                    {"uid": m["uid"], "repo": m["repoName"], "title": m["title"]}
+                    for m in matches
+                ],
+            }
+    if not matches:
+        return {"error": f"ADR '{uid}' not found."}
+
+    adr = dict(matches[0])
+
+    # Resolve edge targets and ticket states so the caller gets one useful
+    # answer instead of a list of ids to look up separately.
+    by_uid = {a["uid"]: a for a in index["adrs"]}
+    adr["edges"] = [
+        {
+            **e,
+            "targetTitle": by_uid[e["target"]]["title"] if e["target"] in by_uid else None,
+        }
+        for e in adr["edges"]
+    ]
+
+    state = load_state()
+    tickets = {t["id"]: t for t in state["tickets"]}
+    adr["ticketDetails"] = [
+        {"id": tid, "title": tickets[tid]["title"], "status": tickets[tid]["status"]}
+        for tid in adr["tickets"] if tid in tickets
+    ]
+
+    return adr
 
 
 # ── Entry Point ────────────────────────────────────────────────────────────────
