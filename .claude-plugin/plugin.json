@@ -8,7 +8,12 @@
   "homepage": "https://github.com/PyGuy2000/devflow-mcp",
   "repository": "https://github.com/PyGuy2000/devflow-mcp",
   "license": "MIT",
-  "keywords": ["tickets", "tracker", "mcp", "adr", "workflow"],
-  "mcpServers": "./.mcp.json",
-  "hooks": "./hooks/hooks.json"
+  "keywords": [
+    "tickets",
+    "tracker",
+    "mcp",
+    "adr",
+    "workflow"
+  ],
+  "mcpServers": "./.mcp.json"
 }
