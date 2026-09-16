@@ -25,9 +25,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from adr_categories import DOMAIN_LABELS, LAYERS
+from devflow_config import overrides_file
 
-REVIEW_CSV = Path.home() / "homelab-gitops" / "docs" / "project_notes" / "adr_category_review.csv"
-OVERRIDES = Path.home() / "homelab-gitops" / "docs" / "project_notes" / "adr_categories.json"
+# Both live beside each other; adr_overrides_file in config.json moves them.
+OVERRIDES = overrides_file()
+REVIEW_CSV = OVERRIDES.with_name("adr_category_review.csv")
 
 
 def main():

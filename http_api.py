@@ -19,7 +19,9 @@ from state_store import STATE_FILE, abort, mutate_state, next_ticket_id, read_st
 _PRIORITIES = ("critical", "high", "medium", "low")
 _STATUSES = ("backlog", "active", "blocked", "done")
 
-_CONFIG_FILE = Path(os.path.expanduser("~/.config/devflow-mcp/config.json"))
+from devflow_config import CONFIG_FILE as _CONFIG_FILE  # noqa: E402
+
+_HTML_FILE = Path(__file__).resolve().parent / "devflow.html"
 
 
 def _api_token() -> str:
@@ -119,7 +121,7 @@ class DevFlowHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in ("/", "/index.html"):
-            html_file = Path(os.path.expanduser("~/.config/devflow-mcp/devflow.html"))
+            html_file = _HTML_FILE
             if html_file.exists():
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")

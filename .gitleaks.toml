@@ -4,7 +4,7 @@ title = "PyGuy2000 app gitleaks config"
 useDefault = true
 
 # ----------------------------------------------------------------------
-# Custom rules — secrets the homelab actually uses
+# Custom rules: secret shapes this project's users are likely to hold
 # ----------------------------------------------------------------------
 
 [[rules]]

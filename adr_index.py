@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """
-ADR index builder — turns ~450 ADRs scattered across 34 repos into one JSON
+ADR index builder: turns the ADRs scattered across your repos into one JSON
 file the DevFlow dashboard can render.
 
 Why this exists: DevFlow tracks tickets well and decisions not at all. The
-ADRs hold the actual development path, but they live in 34 separate
-decisions.md files, every project restarts numbering at ADR-001 (so "ADR-013"
-names three different decisions), and the only ADR-to-ticket link anywhere is
-a string prefix in a ticket title.
+ADRs hold the actual development path, but they live in one decisions.md (or
+decisions/ directory) per repo, every project restarts numbering at ADR-001
+(so "ADR-013" names several decisions), and the only ADR-to-ticket link
+anywhere is a string prefix in a ticket title.
+
+Which repos are scanned: every project's repo_path, plus every directory one
+level under each entry of adr_repo_roots in config.json. adr_exclude_dirs
+names directories to skip; adr_overrides_file holds per-ADR category
+corrections.
 
 What it produces: adr_index.json — every ADR with a collision-proof uid, a
 Layer x Domain classification, resolved status, and typed edges to other ADRs
@@ -36,58 +41,68 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from adr_categories import DOMAIN_LABELS, LAYER_LABELS, LAYERS, classify
 from adr_parse import load_decisions_per_file, parse_adrs
+from devflow_config import expand, load_config, overrides_file
 from state_store import CONFIG_DIR, read_state
 
 INDEX_FILE = CONFIG_DIR / "adr_index.json"
 
-# Where repos live. Each root is scanned one level deep, plus the root itself.
-REPO_ROOTS = [
-    Path.home() / "python" / "projects",
-    Path.home(),
-]
-
-# Directories that contain ADRs but must not be indexed.
-#   platform_kernel_os-adr122-123 — leftover git worktree, one ADR behind the
-#     real repo, would double every platform_kernel_os ADR.
-#   docs_preview — a byte-identical copy of generator_siting_engine's ADRs.
-EXCLUDED_DIRS = {
-    "platform_kernel_os-adr122-123",
-}
-EXCLUDED_PATH_PARTS = {"docs_preview", "node_modules", ".git", "venv", ".venv"}
-
-# Overrides file. Git-tracked in homelab-gitops so category corrections are
-# versioned alongside the decisions themselves.
-OVERRIDES_FILE = (
-    Path.home() / "homelab-gitops" / "docs" / "project_notes" / "adr_categories.json"
-)
+# Path parts that mark a copy or a vendored tree rather than a repo of record.
+EXCLUDED_PATH_PARTS = {"node_modules", ".git", "venv", ".venv"}
 
 STALE_PROPOSAL_DAYS = 90
+
+
+def repo_roots(config: dict) -> list[Path]:
+    """adr_repo_roots from config.json, expanded. Each is scanned one level deep, plus itself."""
+    return [p for p in (expand(r) for r in config.get("adr_repo_roots") or []) if p]
+
+
+def excluded_dirs(config: dict) -> set[str]:
+    """Repo directory names never indexed: a stale worktree, a byte-identical copy."""
+    return {str(d) for d in (config.get("adr_exclude_dirs") or [])}
+
+
+def excluded_path_parts(config: dict) -> set[str]:
+    """Path segments inside a repo that mark a copy rather than the record."""
+    return EXCLUDED_PATH_PARTS | {str(d) for d in (config.get("adr_exclude_path_parts") or [])}
 
 
 # ── Discovery ──────────────────────────────────────────────────────────────────
 
 def _normalize(name: str) -> str:
-    """Fold hyphen/underscore/case/.py so 'homelab-gitops' == 'proj-homelab_gitops'."""
+    """Fold hyphen/underscore/case/.py so 'my-app' == 'proj-my_app'."""
     return re.sub(r"[^a-z0-9]", "", name.lower().removesuffix(".py"))
 
 
-def discover_repos() -> list[Path]:
+def _has_adrs(repo: Path) -> bool:
+    notes = repo / "docs" / "project_notes"
+    return (notes / "decisions.md").exists() or (notes / "decisions").is_dir()
+
+
+def discover_repos(state: dict | None = None, config: dict | None = None) -> list[Path]:
     """Find every repo with an ADR log.
 
-    Driven by the filesystem, not by DevFlow's project list, for two reasons:
-    every project's repoPath is currently empty, and nine repos with ADRs have
-    no DevFlow project at all. Driving from disk finds both.
+    Two sources: each DevFlow project's repoPath (the repos you told DevFlow
+    about) and each configured root scanned one level deep (the repos you
+    have not). A repo with ADRs and no DevFlow project is still indexed and
+    reported under reposWithoutDevflowProject.
     """
+    state = read_state() if state is None else state
+    config = config or load_config()
+    skip = excluded_dirs(config)
     found = {}
-    for root in REPO_ROOTS:
+    for p in state.get("projects", []):
+        repo = expand(p.get("repoPath") or "")
+        if repo and repo.is_dir() and repo.name not in skip and _has_adrs(repo):
+            found[repo.resolve()] = True
+    for root in repo_roots(config):
         if not root.is_dir():
             continue
         candidates = [root] + [p for p in root.iterdir() if p.is_dir()]
         for repo in candidates:
-            if repo.name in EXCLUDED_DIRS or repo.name.startswith("."):
+            if repo.name in skip or repo.name.startswith("."):
                 continue
-            notes = repo / "docs" / "project_notes"
-            if (notes / "decisions.md").exists() or (notes / "decisions").is_dir():
+            if _has_adrs(repo):
                 found[repo.resolve()] = True
     return sorted(found.keys())
 
@@ -159,7 +174,8 @@ def split_title(raw_title: str) -> tuple[str, str, str]:
 # only recognises a bold marker alone on its line, so inline fields like these
 # are invisible to it. Scraping them separately here keeps section boundaries
 # (and therefore scan_project's behaviour) untouched.
-_INLINE_FIELD_RE = re.compile(r"^\*\*([A-Za-z ]{2,20}?)\*\*\s*:?\s*(\S.*)$", re.MULTILINE)
+# Both spellings count: ``**Status:** x`` (colon inside the bold) and ``**Status**: x``.
+_INLINE_FIELD_RE = re.compile(r"^\*\*([A-Za-z ]{2,20}?):?\*\*\s*:?\s*(\S.*)$", re.MULTILINE)
 
 
 def inline_fields(body: str) -> dict:
@@ -184,8 +200,8 @@ def resolve_status(tag: str, sections: dict, inline: dict) -> tuple[str, str]:
             if word in field:
                 return status, "status-field"
 
-    # No marker anywhere. 54 of 58 homelab-gitops ADRs are in this state, so
-    # this is the common path, not the exception. Flagged so the UI can grey it.
+    # No marker anywhere. Most ADRs in older repos are in this state, so this
+    # is the common path, not the exception. Flagged so the UI can grey it.
     return "accepted", "inferred"
 
 
@@ -236,7 +252,7 @@ def extract_edges(body: str, own_uid: str, own_project_key: str,
                   repo_keys: dict) -> list[dict]:
     """Find ADR->ADR references and type them.
 
-    A reference qualified by a known repo name ("platform_kernel_os ADR-013")
+    A reference qualified by a known repo name ("my_app ADR-013")
     becomes a cross-project edge. Everything else resolves within the current
     project. This is the whole reason uids exist: without qualification,
     "ADR-013" is ambiguous across three repos.
@@ -285,10 +301,16 @@ def extract_tickets(body: str) -> list[str]:
 
 # ── Inline category fields ─────────────────────────────────────────────────────
 
-def inline_categories(sections: dict) -> tuple[str, str]:
-    """Read **Layer:** / **Domain:** fields written into the ADR itself."""
-    layer = (sections.get("layer", "") or "").strip().lower().split("\n")[0]
-    domain = (sections.get("domain", "") or "").strip().lower().split("\n")[0]
+def inline_categories(sections: dict, inline: dict | None = None) -> tuple[str, str]:
+    """Read **Layer:** / **Domain:** fields written into the ADR itself.
+
+    Either form counts: a bold marker alone on its line (a section) or the
+    one-line ``**Layer:** infra`` form (an inline field). The convention that
+    puts these two lines right under the heading uses the inline form.
+    """
+    inline = inline or {}
+    layer = (sections.get("layer", "") or inline.get("layer", "") or "").strip().lower().split("\n")[0]
+    domain = (sections.get("domain", "") or inline.get("domain", "") or "").strip().lower().split("\n")[0]
     layer = layer if layer in LAYERS else ""
     domain = domain if domain in DOMAIN_LABELS else ""
     return layer, domain
@@ -296,10 +318,11 @@ def inline_categories(sections: dict) -> tuple[str, str]:
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 
-def load_overrides() -> dict:
-    if OVERRIDES_FILE.exists():
+def load_overrides(config: dict | None = None) -> dict:
+    path = overrides_file(config)
+    if path.exists():
         try:
-            return json.loads(OVERRIDES_FILE.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
             print(f"warning: overrides unreadable ({exc}); ignoring", file=sys.stderr)
     return {}
@@ -307,12 +330,13 @@ def load_overrides() -> dict:
 
 def build(verbose: bool = False) -> dict:
     state = read_state()
+    config = load_config()
     project_map = map_projects(state)
     ticket_ids = {t["id"] for t in state.get("tickets", [])}
     ticket_by_id = {t["id"]: t for t in state.get("tickets", [])}
-    overrides = load_overrides()
+    overrides = load_overrides(config)
 
-    repos = discover_repos()
+    repos = discover_repos(state, config)
     # Repo directory name -> project key used in uids. The project key is the
     # DevFlow project id when one matches, else a synthetic key from the dir.
     repo_keys = {}
@@ -330,6 +354,7 @@ def build(verbose: bool = False) -> dict:
     adrs = []
     per_repo_counts = {}
     skipped_files = []
+    skip_parts = excluded_path_parts(config)
 
     for repo in repos:
         norm = _normalize(repo.name)
@@ -337,7 +362,7 @@ def build(verbose: bool = False) -> dict:
         count = 0
 
         for content, source_path in load_decisions_per_file(repo):
-            if any(part in source_path for part in EXCLUDED_PATH_PARTS):
+            if any(part in source_path for part in skip_parts):
                 skipped_files.append(source_path)
                 continue
 
@@ -361,7 +386,7 @@ def build(verbose: bool = False) -> dict:
                 # are tracked separately because an ADR often has one confirmed
                 # and one guessed, and reporting the pair as "override" would
                 # hide the guess from the unconfirmed count.
-                inline_layer, inline_domain = inline_categories(adr["sections"])
+                inline_layer, inline_domain = inline_categories(adr["sections"], inline)
                 ov = overrides.get(uid) or {}
                 if not isinstance(ov, dict):
                     ov = {}

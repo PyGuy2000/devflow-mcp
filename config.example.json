@@ -1,0 +1,18 @@
+{
+  "projecthub_db_path": "",
+  "auto_time_entries": true,
+  "default_classification": "personal",
+  "stale_active_days": 14,
+  "wip_limit": 10,
+  "max_timer_hours": 8.0,
+  "verify_timeout_sec": 600,
+  "api_token": "",
+  "adr_repo_roots": [],
+  "adr_exclude_dirs": [],
+  "adr_exclude_path_parts": [],
+  "adr_overrides_file": "",
+  "adr_domains": {},
+  "adr_project_domains": {},
+  "adr_domain_keywords": {},
+  "adr_layer_keywords": {}
+}

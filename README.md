@@ -82,7 +82,7 @@ A ticket can carry a `verify_cmd`: one shell command that proves the work is fin
 add_ticket(
     title="Build ADR-110 governance checks",
     why="ADR-110 ships no check. The rule decays until one exists.",
-    project="platform_kernel_os",
+    project="my_app",
     verify_cmd="pytest tests/test_governance_checks.py -q",
 )
 ```
@@ -102,8 +102,8 @@ add_ticket(
 `update_ticket_status(..., "done")` then requires three things: a stored result, exit 0, and a `rev` equal to the current `git rev-parse --short HEAD`. That third condition is the one that earns its keep. Tests pass, the agent makes one more cleanup commit, and the proof no longer applies:
 
 ```
-{"error": "T-557 proof is stale: it passed on a3f91c2, HEAD is now b8e0d41.",
- "hint": "Re-run verify_ticket(\"T-557\")."}
+{"error": "T-042 proof is stale: it passed on a3f91c2, HEAD is now b8e0d41.",
+ "hint": "Re-run verify_ticket(\"T-042\")."}
 ```
 
 Tickets with no `verify_cmd` behave exactly as before. The field is opt-in per ticket, there is no migration, and old tickets keep closing on a plain status change.
@@ -111,7 +111,7 @@ Tickets with no `verify_cmd` behave exactly as before. The field is opt-in per t
 When a check genuinely cannot run, close the ticket with a reason:
 
 ```python
-update_ticket_status("T-557", "done", waiver="checker needs a live k8s context, ran manually")
+update_ticket_status("T-042", "done", waiver="checker needs a live k8s context, ran manually")
 ```
 
 The transition succeeds and the ticket log keeps the sentence `WAIVED verification: checker needs a live k8s context, ran manually` permanently. Without an escape hatch, a gate that blocks one legitimate close gets switched off for every ticket.
@@ -126,13 +126,13 @@ The `scan_project` tool reads a project's Architectural Decision Records and bac
 
 ```python
 # Dry run: see what's missing without creating tickets
-scan_project(path="/home/user/my-project", dry_run=True)
+scan_project(path="~/code/my-project", dry_run=True)
 
 # Create backlog tickets for outstanding ADRs
-scan_project(path="/home/user/my-project", project="my_project", dry_run=False)
+scan_project(path="~/code/my-project", project="my_project", dry_run=False)
 
 # Full sync: also create done tickets for implemented ADRs
-scan_project(path="/home/user/my-project", project="my_project", dry_run=False, include_completed=True)
+scan_project(path="~/code/my-project", project="my_project", dry_run=False, include_completed=True)
 ```
 
 Outstanding work heuristics:
@@ -145,9 +145,27 @@ Cross-project deduplication: if any ticket in any project already references an 
 
 ## Installation
 
+Prerequisites: Python 3.11 or newer on PATH as `python3`, and the `mcp` package for that interpreter:
+
 ```bash
-git clone https://github.com/PyGuy2000/devflow-mcp.git ~/.config/devflow-mcp
-pip install mcp
+python3 -m pip install mcp
+```
+
+### As a Claude Code plugin (recommended)
+
+DevFlow is published through the K-mem marketplace. Two commands install the MCP server and the session-start hook:
+
+```bash
+claude plugin marketplace add PyGuy2000/k-mem
+claude plugin install devflow@k-mem
+```
+
+Nothing in your settings files is edited. State and config live in `~/.config/devflow-mcp/`; the first session creates that directory and copies `config.example.json` into it as `config.json`. Set `DEVFLOW_CONFIG_DIR` to put them somewhere else.
+
+### By hand
+
+```bash
+git clone https://github.com/PyGuy2000/devflow-mcp.git ~/devflow-mcp
 ```
 
 Add to Claude Code settings (`~/.claude/settings.json`):
@@ -163,11 +181,11 @@ Add to Claude Code settings (`~/.claude/settings.json`):
 }
 ```
 
-Replace `/path/to/` with the actual path (e.g., `~/.config/devflow-mcp/server.py`).
+Replace `/path/to/` with the actual path. Wire `hooks/session-status.py` as a SessionStart hook the same way (`hooks/hooks.json` shows the entry).
 
 ## Session-start hook
 
-The `hooks/session-status.py` script prints a quick status summary when Claude Code starts:
+The `hooks/session-status.py` script prints a quick status summary when Claude Code starts (the plugin wires it for you):
 
 ```
 DevFlow: 6 active, 5 blocked, 23 backlog, 21 done
@@ -176,7 +194,28 @@ DevFlow: 6 active, 5 blocked, 23 backlog, 21 done
     T-092 [medium] Build monitoring dashboard page
 ```
 
-To enable it, add a SessionStart hook in your Claude Code settings.
+On the first run it also creates `~/.config/devflow-mcp/config.json` and tells you if the `mcp` package is missing.
+
+## ADR index
+
+`refresh_adr_index` builds `adr_index.json`: every ADR across your repos with a collision-proof uid (`<project>:ADR-NNN`), a Layer x Domain classification, a resolved status, and typed edges to other ADRs and to tickets. `list_adrs` filters it; `get_adr` returns one record in full. The web UI renders it as the Decisions view.
+
+Which repos are indexed: every project's `repo_path`, plus every directory one level under each entry of `adr_repo_roots` in `config.json`. The Layer axis is fixed (ui, chatbot, agentic, etl, datasets, plugins-engines, infra, security, ops). The Domain axis is yours:
+
+```json
+{
+  "adr_repo_roots": ["~/code"],
+  "adr_exclude_dirs": ["old-worktree"],
+  "adr_exclude_path_parts": ["docs_preview"],
+  "adr_overrides_file": "",
+  "adr_domains": {"billing": "Billing", "platform": "Platform"},
+  "adr_project_domains": {"my_app": "billing", "my_infra": "platform"},
+  "adr_domain_keywords": {"billing": ["invoice", "tax table"]},
+  "adr_layer_keywords": {"agentic": ["my-bot-name"]}
+}
+```
+
+An ADR can also carry `**Layer:**` and `**Domain:**` lines of its own; those win over everything. Corrections for the rest go in the overrides file (`adr_categories.json` beside the state file unless `adr_overrides_file` says otherwise): `python3 adr_index.py --review-csv sheet.csv` dumps the guesses, you fill in the sheet, `python3 adr_apply_review.py` applies it.
 
 ## Web UI
 
@@ -211,7 +250,7 @@ The bridge also computes a health score (0-10) per project from activity recency
 
 The bridge is private and not included in this repository — it is tightly coupled to a specific project management schema. The core MCP server (`server.py`) works fully without it: if `projecthub_db_path` in `config.json` is empty or the file does not exist, the bridge is silently disabled.
 
-Configure in `config.json`:
+Configure in `~/.config/devflow-mcp/config.json` (`config.example.json` documents every key):
 
 ```json
 {
@@ -221,9 +260,12 @@ Configure in `config.json`:
   "stale_active_days": 14,
   "wip_limit": 10,
   "max_timer_hours": 8.0,
-  "verify_timeout_sec": 600
+  "verify_timeout_sec": 600,
+  "api_token": ""
 }
 ```
+
+`api_token` gates the web UI's mutating routes (ticket creation, index refresh). It stays in this file on purpose: Claude Code strips environment variables whose names look like credentials from plugin MCP servers, so an env var would never reach the server.
 
 ## Manifest ingestion
 
@@ -269,19 +311,28 @@ Periodically:
 
 ```
 devflow-mcp/
-  server.py                  # MCP server (18 tools, ~1,700 lines)
+  .claude-plugin/plugin.json # plugin manifest (name devflow)
+  .mcp.json                  # the MCP server entry the plugin wires
+  server.py                  # MCP server (18 tools)
   state_store.py             # Lock + atomic-replace state persistence
+  devflow_config.py          # config.json loader shared by every entry point
+  adr_index.py               # ADR index builder (refresh_adr_index)
+  adr_categories.py          # Layer x Domain classifier; domains from config.json
+  adr_parse.py               # ADR text parsing shared by scan_project and the index
+  adr_apply_review.py        # apply a reviewed category sheet to the overrides file
   github_activity_sync.py    # Optional: cron script, syncs GitHub commits/PRs into ProjectHub
   http_api.py                # Optional web UI server
-  devflow.html                # Web UI (dark theme, served by http_api.py)
-  config.json                # Optional configuration
-  devflow_state.json         # State file (gitignored — holds your tickets)
+  devflow.html               # Web UI (dark theme, served by http_api.py)
+  config.example.json        # every config key; copied to ~/.config/devflow-mcp/config.json on first run
   test_concurrency.py        # Exercises the lock under concurrent writers
   test_stale_write_guard.py  # Exercises the HTTP API's stale-snapshot rejection (409)
-  test_tools.py               # get_ticket, log_work, stale-active/WIP/ready-to-unblock
+  test_tools.py              # get_ticket, log_work, stale-active/WIP/ready-to-unblock
   test_verifier.py           # verify_ticket, the done gate, revision staleness, waivers
+  test_adr_config.py         # ADR discovery, domains and overrides from config.json
+  test_mcp_stdio.py          # the server over stdio from an empty state dir: a project and a ticket
   hooks/
-    session-status.py        # Session-start hook
+    hooks.json               # the plugin's SessionStart entry
+    session-status.py        # first-run setup + status summary
 ```
 
 ## Running the tests
@@ -293,9 +344,11 @@ python3 test_tools.py
 python3 test_verifier.py
 python3 test_stale_write_guard.py
 python3 test_concurrency.py
+python3 test_adr_config.py
+python3 test_mcp_stdio.py
 ```
 
-All three build their own temp state file and clean up after themselves — none of them touch your real `devflow_state.json`.
+Each builds its own temp state file and cleans up after itself; none of them touch your real `devflow_state.json`.
 
 ## Requirements
 

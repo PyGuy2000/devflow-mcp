@@ -13,7 +13,22 @@ Assignment precedence, highest first:
 
 Only (3) is guesswork, and everything it produces is tagged
 ``categorySource: "keyword"`` so the UI can show it as unconfirmed.
+
+The Layer axis is fixed (below). The Domain axis is yours: ``adr_domains``,
+``adr_project_domains`` and ``adr_domain_keywords`` in config.json define
+it. With none configured every ADR lands in ``unassigned`` until an inline
+field or an override says otherwise. ``adr_layer_keywords`` extends the
+built-in layer keywords.
 """
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from devflow_config import load_config  # noqa: E402
+
+_CONFIG = load_config()
 
 # ── Layer vocabulary ───────────────────────────────────────────────────────────
 #
@@ -60,9 +75,9 @@ LAYER_KEYWORDS = {
     ],
     "agentic": [
         "agent", "orchestrat", "claude", "llm", "prompt", "skill",
-        "hermes", "clutch", "openclaw", "mcp", "harness", "subagent",
+        "mcp", "harness", "subagent",
         "ollama", "inference", "model strategy", "autonomous",
-        "self-improving", "reasoning", "tool call", "humanizer",
+        "self-improving", "reasoning", "tool call",
         "qwen", "sonnet", "haiku", "opus", "glm",
     ],
     "etl": [
@@ -73,7 +88,7 @@ LAYER_KEYWORDS = {
     "datasets": [
         "data model", "schema", "postgis", "dataset", "ontology",
         "registry", "warehouse", "retrieval", "vector search",
-        "embedding", "knowledge base", "kbvault", "chromadb",
+        "embedding", "knowledge base", "chromadb",
         "entitlement", "taxonomy", "directory structure", "data structure",
         "shapefile", "geospatial data",
     ],
@@ -104,83 +119,32 @@ LAYER_KEYWORDS = {
     ],
 }
 
-# ── Domain vocabulary ──────────────────────────────────────────────────────────
+# Extra layer keywords from config.json, merged into the built-in table.
+for _layer, _kws in (_CONFIG.get("adr_layer_keywords") or {}).items():
+    if _layer in LAYER_KEYWORDS and isinstance(_kws, list):
+        LAYER_KEYWORDS[_layer] = LAYER_KEYWORDS[_layer] + [str(k).lower() for k in _kws]
 
+# ── Domain vocabulary (from config.json) ───────────────────────────────────────
+
+#: {"key": "Label"}. "unassigned" is always present and always last.
 DOMAIN_LABELS = {
-    "homelab": "Homelab",
-    "platform-kernel": "Platform Kernel",
-    "kbvault": "KBVault",
-    "clutch-openclaw": "Clutch / OpenClaw",
-    "alberta-market": "Alberta Market",
-    "nerc": "NERC",
-    "pediatrica": "Pediatrica",
-    "consulting": "Consulting",
-    "personal-automation": "Personal Automation",
-    "harness": "Dev Harness",
-    "modelling": "Modelling",
+    **{str(k): str(v) for k, v in (_CONFIG.get("adr_domains") or {}).items() if k != "unassigned"},
     "unassigned": "Unassigned",
 }
 
-# Default domain per repo directory name. This is the starting point; the
-# keyword overrides below can pull an individual ADR into a different domain
-# (e.g. a KBVault ADR living in the platform_kernel_os repo).
+#: Default domain per repo directory name. The starting point; a keyword hit
+#: in the title or the Decision section can pull an individual ADR elsewhere.
 PROJECT_DOMAIN = {
-    "homelab-gitops": "homelab",
-    "platform_kernel_os": "platform-kernel",
-    "etl_api_pipeline": "alberta-market",
-    "AB_Electricity_Sector_Stats": "alberta-market",
-    "NEW_AESO_API": "alberta-market",
-    "alberta_substation_satellite_pipeline": "alberta-market",
-    "avoided_cost_model": "modelling",
-    "virtual_power_plant": "modelling",
-    "energy_pathway_orchestrator": "modelling",
-    "generator_siting_engine": "modelling",
-    "Digital_Twin_Turbine": "modelling",
-    "telemetry_simulation": "modelling",
-    "energy_mgmt_toolkit": "modelling",
-    "vppa_hedge": "modelling",
-    "finstmt": "modelling",
-    "casino_simulator": "modelling",
-    "synth-data-ml": "modelling",
-    "nerc_compliance_dashboard": "nerc",
-    "pediatrica_dashboard": "pediatrica",
-    "consulting_os": "consulting",
-    "community_investment_program": "consulting",
-    "devflow-mcp": "harness",
-    "python_project_tracker": "harness",
-    "agent_framework_gem": "harness",
-    "agent_framework_audit": "harness",
-    "cognitive_scaffolding": "harness",
-    "loop_demo": "harness",
-    "medium_vault": "harness",
-    "my_solar_rag": "kbvault",
-    "sec_energy_analyzer.py": "kbvault",
-    "geospatial-dashboard": "alberta-market",
-    "hud_globe2": "alberta-market",
-    "utility_dashboard": "personal-automation",
-    "mom_assisted_living": "personal-automation",
-    "ai-resume-builder": "personal-automation",
+    str(k): str(v) for k, v in (_CONFIG.get("adr_project_domains") or {}).items() if str(v) in DOMAIN_LABELS
 }
 
-# Keyword -> domain. Only applied when the hit is strong (title match, or two
-# or more body hits), because a passing mention of "Telegram" in an infra ADR
-# should not reclassify it into Clutch.
+#: Keyword -> domain. Only applied when the hit is strong (title match, or two
+#: or more Decision-section hits), because a passing mention in a rollout list
+#: should not reclassify an ADR.
 DOMAIN_KEYWORDS = {
-    "kbvault": ["kbvault", "knowledge base service", "private knowledge base"],
-    "clutch-openclaw": ["clutch", "openclaw"],
-    "harness": [
-        "claude code", "devflow", "mcp server", "settings file",
-        "subagent", "slash command", "claude skill",
-    ],
-    "alberta-market": ["aeso", "alberta", "pool price", "market intelligence"],
-    "nerc": ["nerc"],
-    "pediatrica": ["pediatrica"],
-    "consulting": ["client project", "invoice", "consulting"],
-    "personal-automation": [
-        "gmail", "google calendar", "hubspot", "crm", "chore",
-        "meal plan", "family calendar", "job market", "email automation",
-        "job alert",
-    ],
+    str(k): [str(w).lower() for w in v]
+    for k, v in (_CONFIG.get("adr_domain_keywords") or {}).items()
+    if str(k) in DOMAIN_LABELS and isinstance(v, list)
 }
 
 
@@ -222,9 +186,8 @@ def classify(title: str, sections: dict, body: str, project_dir_name: str) -> tu
     #
     # The repo's default domain wins unless a keyword hits the TITLE or the
     # Decision section. Counting mentions anywhere in the body was far too
-    # eager: homelab-gitops ADRs routinely list every affected app, so
-    # "Immutable Image Tags" got pulled into the Pediatrica domain purely
-    # because Pediatrica appeared twice in a rollout list.
+    # eager: an infrastructure ADR routinely lists every affected app, and a
+    # rollout list is not a subject.
     domain = PROJECT_DOMAIN.get(project_dir_name, "unassigned")
     best_domain_score = 0
     for dom, kws in DOMAIN_KEYWORDS.items():

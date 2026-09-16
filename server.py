@@ -41,24 +41,9 @@ from adr_parse import (
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-CONFIG_FILE = CONFIG_DIR / "config.json"
-
-DEFAULT_CONFIG = {
-    "projecthub_db_path": "",
-    "auto_time_entries": True,
-    "default_classification": "personal",
-    "stale_active_days": 14,
-    "wip_limit": 10,
-    "max_timer_hours": 8.0,
-    "verify_timeout_sec": 600,
-}
-
-
-def load_config() -> dict:
-    if CONFIG_FILE.exists():
-        with open(CONFIG_FILE) as f:
-            return {**DEFAULT_CONFIG, **json.load(f)}
-    return dict(DEFAULT_CONFIG)
+# One loader shared with http_api.py, the ADR tooling and the session hook:
+# every path a user might change lives in config.json, never in code.
+from devflow_config import CONFIG_FILE, DEFAULT_CONFIG, load_config  # noqa: E402,F401
 
 
 # ── State Management ───────────────────────────────────────────────────────────
@@ -74,19 +59,32 @@ load_state = read_state
 _bridge = None
 
 
-def get_bridge():
-    global _bridge
-    if _bridge is None:
-        from projecthub_bridge import ProjectHubBridge
+_bridge_checked = False
 
-        config = load_config()
-        db_path = config["projecthub_db_path"]
-        if Path(db_path).exists():
-            _bridge = ProjectHubBridge(
-                db_path, max_timer_hours=config.get("max_timer_hours", 8.0)
-            )
-        else:
-            _bridge = None
+
+def get_bridge():
+    """The ProjectHub bridge, or None.
+
+    Silently disabled when projecthub_db_path is empty, points at no file,
+    or projecthub_bridge.py is not shipped alongside (the public repo does
+    not ship it). Checked once per process; a missing bridge must never turn
+    a ticket tool into an error.
+    """
+    global _bridge, _bridge_checked
+    if _bridge_checked:
+        return _bridge
+    _bridge_checked = True
+    config = load_config()
+    db_path = str(config.get("projecthub_db_path") or "").strip()
+    if not db_path or not Path(os.path.expanduser(db_path)).exists():
+        return None
+    try:
+        from projecthub_bridge import ProjectHubBridge
+    except ImportError:
+        return None
+    _bridge = ProjectHubBridge(
+        os.path.expanduser(db_path), max_timer_hours=config.get("max_timer_hours", 8.0)
+    )
     return _bridge
 
 
@@ -1740,9 +1738,7 @@ def list_adrs(
         project: Filter by DevFlow project name/ID or repo directory name.
         layer: Filter by layer (ui, chatbot, agentic, etl, datasets,
             plugins-engines, infra, security, ops).
-        domain: Filter by domain (homelab, platform-kernel, kbvault,
-            clutch-openclaw, alberta-market, nerc, pediatrica, consulting,
-            personal-automation, harness, modelling).
+        domain: Filter by domain (a key of adr_domains in config.json).
         status: Filter by status (accepted, implemented, proposed, deferred,
             superseded, rejected).
         has_ticket: True for ADRs with linked DevFlow tickets, False for those without.
@@ -1828,7 +1824,7 @@ def get_adr(uid: str) -> dict:
     Get one ADR in full, including its section prose, edges, and linked tickets.
 
     Args:
-        uid: The ADR's unique id, e.g. "proj-homelab_gitops:ADR-057". A bare
+        uid: The ADR's unique id, e.g. "proj-my_app:ADR-057". A bare
             "ADR-057" is accepted but will error if it is ambiguous across repos.
     """
     from adr_index import load_index

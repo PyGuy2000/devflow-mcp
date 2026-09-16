@@ -1,0 +1,14 @@
+{
+  "name": "devflow",
+  "version": "0.1.0",
+  "description": "Solo ticket tracker for AI coding agents: projects, tickets with a mandatory why, dependencies, a verification gate, an ADR index, and a status report at session start. State is one JSON file.",
+  "author": {
+    "name": "KazzerLabs"
+  },
+  "homepage": "https://github.com/PyGuy2000/devflow-mcp",
+  "repository": "https://github.com/PyGuy2000/devflow-mcp",
+  "license": "MIT",
+  "keywords": ["tickets", "tracker", "mcp", "adr", "workflow"],
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json"
+}

@@ -1,58 +1,41 @@
 #!/usr/bin/env bash
-# Sync this git checkout to the live install, or pull the live install back.
+# The private install is this public repo plus an overlay. This script keeps
+# the shared part identical in both directions and never moves the overlay.
 #
-# ~/.config/devflow-mcp is what actually runs (MCP server + HTTP API).
-# ~/devflow-mcp is the public git repo. They are NOT identical by design:
-# server.py carries two sanitized hunks here (a generic module docstring and
-# an empty projecthub_db_path default) so no local path ships publicly.
+#   SHARED   every file listed in FILES below: code, tests, hook, UI, example config.
+#            Edit it HERE (the public repo), then `./sync.sh install`.
+#   OVERLAY  private-only, never copied either way:
+#              config.json           the live settings (paths, api_token)
+#              devflow_state.json    the live tickets (+ backups/, *.lock, logs/)
+#              adr_index.json        derived cache
+#              projecthub_bridge.py  the private SQLite bridge
+#              README.md             the private install's own notes
+#              recovery-*/           incident records
 #
-# Before this script existed the two copies drifted silently and nobody could
-# tell an intentional sanitization from a lost edit.
+# Every path that used to be a private code hunk (the ProjectHub DB, the ADR
+# repo roots, the overrides file, the domain table) now lives in config.json,
+# so there is nothing left to sanitize: the shared files are byte-identical.
 #
-#   ./sync.sh install   copy repo -> live   (re-applies the real db path)
-#   ./sync.sh pull      copy live -> repo   (re-applies the sanitization)
-#   ./sync.sh diff      show what differs, ignoring the sanitized hunks
+#   ./sync.sh install   copy repo -> live
+#   ./sync.sh pull      copy live -> repo   (shared files only; the overlay never comes back)
+#   ./sync.sh diff      show what differs
 
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIVE="$HOME/.config/devflow-mcp"
-FILES=(server.py state_store.py http_api.py projecthub_bridge.py
+LIVE="${DEVFLOW_LIVE_DIR:-$HOME/.config/devflow-mcp}"
+FILES=(server.py state_store.py devflow_config.py http_api.py
        github_activity_sync.py adr_parse.py adr_categories.py adr_index.py adr_apply_review.py
-       devflow.html)
-
-PUBLIC_DOC='Claude Desktop, and any MCP-compatible client. Optionally syncs
-side-effects to a ProjectHub SQLite database for portfolio tracking.'
-LIVE_DOC='Claude Desktop, and Clutch bot. Syncs side-effects to ProjectHub'"'"'s
-SQLite database for automatic portfolio tracking.'
-LIVE_DB='    "projecthub_db_path": os.path.expanduser(
-        "~/python/projects/python_project_tracker/data/projecthub.db"
-    ),'
-PUBLIC_DB='    "projecthub_db_path": "",'
-
-retarget() {  # $1 = file, $2 = "live" | "public"
-  python3 - "$1" "$2" <<'PY'
-import os, pathlib, sys
-path, mode = pathlib.Path(sys.argv[1]), sys.argv[2]
-s = path.read_text()
-pub_doc, live_doc = os.environ["PUBLIC_DOC"], os.environ["LIVE_DOC"]
-pub_db, live_db = os.environ["PUBLIC_DB"], os.environ["LIVE_DB"]
-if mode == "live":
-    s = s.replace(pub_doc, live_doc).replace(pub_db, live_db)
-else:
-    s = s.replace(live_doc, pub_doc).replace(live_db, pub_db)
-path.write_text(s)
-PY
-}
-export PUBLIC_DOC LIVE_DOC LIVE_DB PUBLIC_DB
+       devflow.html config.example.json hooks/session-status.py hooks/hooks.json
+       test_tools.py test_verifier.py test_stale_write_guard.py test_concurrency.py test_adr_config.py)
 
 case "${1:-}" in
   install)
+    mkdir -p "$LIVE/hooks"
     for f in "${FILES[@]}"; do
       [ -f "$REPO/$f" ] || continue
       cp "$REPO/$f" "$LIVE/$f"
     done
-    retarget "$LIVE/server.py" live
     echo "repo -> live. Restart to load: systemctl --user restart devflow-http.service"
     echo "MCP tool changes need a new Claude Code session (servers are per-session)."
     ;;
@@ -61,17 +44,18 @@ case "${1:-}" in
       [ -f "$LIVE/$f" ] || continue
       cp "$LIVE/$f" "$REPO/$f"
     done
-    retarget "$REPO/server.py" public
-    echo "live -> repo, sanitization re-applied. Review with: git diff"
+    echo "live -> repo (shared files only). Review with: git diff"
     ;;
   diff)
-    tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+    rc=0
     for f in "${FILES[@]}"; do
-      [ -f "$LIVE/$f" ] && [ -f "$REPO/$f" ] || continue
-      cp "$LIVE/$f" "$tmp/$f"
-      [ "$f" = server.py ] && retarget "$tmp/$f" public
-      diff -u "$REPO/$f" "$tmp/$f" && echo "  same: $f"
+      if [ -f "$LIVE/$f" ] && [ -f "$REPO/$f" ]; then
+        diff -u "$REPO/$f" "$LIVE/$f" && echo "  same: $f" || rc=1
+      elif [ -f "$REPO/$f" ]; then
+        echo "  missing in live: $f"; rc=1
+      fi
     done
+    exit $rc
     ;;
   *)
     echo "usage: $0 {install|pull|diff}" >&2; exit 2 ;;

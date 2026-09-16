@@ -11,8 +11,9 @@ __pycache__/
 logs/
 *.log
 
-# State file — contains your personal tickets. Do not commit.
+# State file: holds your personal tickets. Do not commit.
 devflow_state.json
+*.bak.*
 devflow_state.json.lock
 devflow_state.json.bak.*
 backups/
@@ -22,9 +23,12 @@ backups/
 .idea/
 .vscode/
 
-# Local override (optional)
+# Holds api_token and your machine's paths. config.example.json documents the shape.
+config.json
 config.local.json
+config.json.old-sample
 .gitnexus
 
 # Derived ADR cache — rebuild with adr_index.py, never commit
 adr_index.json
+projecthub_bridge.py
