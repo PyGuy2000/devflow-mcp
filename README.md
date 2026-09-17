@@ -176,8 +176,12 @@ Cross-project deduplication: if any ticket in any project already references an 
 Prerequisites: Python 3.11 or newer on PATH as `python3`, and the `mcp` package for that interpreter:
 
 ```bash
-python3 -m pip install mcp
+python3 -m pip install "mcp<2"
 ```
+
+The pin matters. `mcp` 2.0 renamed `FastMCP` to `MCPServer` and changed other
+APIs, so `pip install mcp` gets 2.x and `server.py` fails to import. Migrating
+is on the list; until then, install 1.x.
 
 ### As a Claude Code plugin (recommended)
 
@@ -381,7 +385,7 @@ Each builds its own temp state file and cleans up after itself; none of them tou
 ## Requirements
 
 - Python 3.11+
-- `mcp` package (FastMCP)
+- `mcp` 1.x, installed as `pip install "mcp<2"`. The 2.0 release renamed `FastMCP` to `MCPServer`; `server.py` still imports the 1.x name.
 - No other dependencies
 
 ## Limitations

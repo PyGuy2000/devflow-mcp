@@ -12,6 +12,10 @@ All notable changes to this project are documented here. The format follows
 - `CONTRIBUTING.md` and `SECURITY.md`.
 - Brand images built by `scripts/make_brand_images.py`: a README banner, a social preview card, and a terminal card showing the verification gate, captured from a real run.
 
+### Fixed
+
+- The documented install no longer breaks on a new machine. `pip install mcp` now resolves to 2.x, which renamed `FastMCP` to `MCPServer`, so `server.py` failed to import. The README, `CONTRIBUTING.md` and CI all pin `mcp<2`. The first CI run found this; every local machine already had 1.x installed.
+
 ## [0.1.0] - 2026-09-16
 
 First public release. 18 MCP tools over a single JSON state file.
