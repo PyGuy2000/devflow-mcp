@@ -7,10 +7,10 @@ Thanks for looking. This is a small project that tracks work for AI coding agent
 ```
 git clone https://github.com/PyGuy2000/devflow-mcp.git
 cd devflow-mcp
-python3 -m pip install "mcp<2" pytest
+python3 -m pip install mcp pytest
 ```
 
-Python 3.11 is the floor. CI runs 3.11 and 3.12. The only runtime dependency is `mcp`, pinned to 1.x because 2.0 renamed `FastMCP` to `MCPServer`. Everything else is standard library, and it should stay that way.
+Python 3.11 is the floor. The only runtime dependency is `mcp`, and both major versions are supported: 2.0 renamed `FastMCP` to `MCPServer`, so `server.py` imports whichever is present. CI is a cross product of 3.11 and 3.12 against `mcp<2` and `mcp>=2`, four jobs. Keep both axes; dropping either half lets the compatibility import rot. Everything else is standard library, and it should stay that way.
 
 ## Running the tests
 

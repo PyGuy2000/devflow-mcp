@@ -8,13 +8,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- A CI workflow that runs all six test suites on Python 3.11 and 3.12, one suite per step so a red run names the file that broke.
+- A CI workflow. It runs all six test suites, one suite per step so a red run names the file that broke. See the matrix note below for what it runs them against.
 - `CONTRIBUTING.md` and `SECURITY.md`.
 - Brand images built by `scripts/make_brand_images.py`: a README banner, a social preview card, and a terminal card showing the verification gate, captured from a real run.
 
+### Changed
+
+- `server.py` runs on `mcp` 1.x and 2.x. The 2.0 release renamed `FastMCP` to `MCPServer`; the import now accepts either name, and the decorator and `run()` signatures are the same across both. An existing install stays on 1.x until its operator chooses to move.
+- CI is a cross product: Python 3.11 and 3.12 against `mcp<2` and `mcp>=2`, four jobs. Both axes are in the matrix proper. Under `include` the second entry would overwrite the first and one major would never be tested.
+
 ### Fixed
 
-- The documented install no longer breaks on a new machine. `pip install mcp` now resolves to 2.x, which renamed `FastMCP` to `MCPServer`, so `server.py` failed to import. The README, `CONTRIBUTING.md` and CI all pin `mcp<2`. The first CI run found this; every local machine already had 1.x installed.
+- The documented install no longer breaks on a new machine. `pip install mcp` resolves to 2.x, which `server.py` could not import, so a fresh install failed before any tool ran. Fixed first with a `mcp<2` pin, then properly by supporting both majors. The first CI run found this; every machine here already had 1.x installed.
 
 ## [0.1.0] - 2026-09-16
 

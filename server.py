@@ -15,7 +15,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from mcp.server.fastmcp import FastMCP
+# The server class was renamed in mcp 2.0. Both names are accepted here so one
+# file runs on either line: an existing install stays on 1.x until its operator
+# upgrades, and a fresh `pip install mcp` gets 2.x and works. The decorator and
+# run() signatures are identical across the two, so only the import differs.
+try:  # mcp >= 2.0
+    from mcp.server.mcpserver import MCPServer as _McpServer
+except ModuleNotFoundError:  # mcp 1.x
+    from mcp.server.fastmcp import FastMCP as _McpServer
 
 # Concurrency-safe persistence (T-174): all writes go through mutate_state(),
 # which locks + re-reads + atomically replaces the state file. Reads use
@@ -90,7 +97,7 @@ def get_bridge():
 
 # ── MCP Server ─────────────────────────────────────────────────────────────────
 
-mcp = FastMCP("devflow")
+mcp = _McpServer("devflow")
 
 
 # ── Tier 1: Daily Work Tools ──────────────────────────────────────────────────

@@ -6,6 +6,11 @@ speaks MCP over stdio with the ``mcp`` client, and proves a project and a
 ticket can be created and read back, and that the state file appears in the
 config dir on the first write. Nothing touches your real state.
 
+Also checks that server.py picked the server class belonging to the installed
+SDK major. mcp 2.0 renamed FastMCP to MCPServer; server.py accepts both, and
+that import is the kind of thing a later edit quietly hardcodes back to one
+name. Run under both majors to mean anything, which CI does.
+
     python3 test_mcp_stdio.py
 """
 
@@ -49,6 +54,19 @@ async def run() -> int:
         else:
             failed += 1
             print(f"  FAIL {name} {detail}")
+
+    # The SDK class server.py resolved, against the SDK actually installed.
+    import importlib.metadata as _meta
+    import importlib.util as _util
+
+    major = int(_meta.version("mcp").split(".")[0])
+    spec = _util.spec_from_file_location("_devflow_server_under_test", SERVER)
+    module = _util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    resolved = type(module.mcp).__name__
+    expected = "MCPServer" if major >= 2 else "FastMCP"
+    check(f"mcp {major}.x resolves to {expected}", resolved == expected,
+          f"got {resolved}")
 
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:

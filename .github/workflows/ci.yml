@@ -8,11 +8,17 @@ on:
 
 jobs:
   tests:
+    # Both axes belong in the matrix proper so this is a real cross product:
+    # 2 interpreters x 2 SDK majors = 4 jobs. Putting the mcp axis under
+    # `include` instead would overwrite rather than multiply, and one major
+    # would silently never be tested.
+    name: py${{ matrix.python-version }} · ${{ matrix.mcp-spec }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
+        mcp-spec: ["mcp<2", "mcp>=2"]
     steps:
       - uses: actions/checkout@v4
 
@@ -20,10 +26,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # mcp 2.x renamed FastMCP to MCPServer, which server.py imports. Pin
-      # until that migration lands, and keep this pin equal to the README's.
       - name: Install the MCP runtime and pytest
-        run: python -m pip install --quiet "mcp<2" pytest
+        run: python -m pip install --quiet "${{ matrix.mcp-spec }}" pytest
+
+      # server.py accepts either SDK server class. Printing the resolved
+      # version means a red run says which line broke without a rerun.
+      - name: Report the resolved SDK version
+        run: python -c "import importlib.metadata as m; print('mcp', m.version('mcp'))"
 
       - name: Identify git to the verifier
         run: |
