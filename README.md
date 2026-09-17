@@ -1,8 +1,28 @@
-# DevFlow MCP
+<div align="center">
+
+<img src="docs/assets/banner.png" alt="KazzerLabs DevFlow: the ticket tracker for AI coding agents" width="800">
+
+[![CI](https://img.shields.io/github/actions/workflow/status/PyGuy2000/devflow-mcp/ci.yml?branch=main&style=for-the-badge&label=CI&labelColor=080C16&color=FF941A)](https://github.com/PyGuy2000/devflow-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/tag/PyGuy2000/devflow-mcp?style=for-the-badge&label=release&labelColor=080C16&color=FF941A)](https://github.com/PyGuy2000/devflow-mcp/tags)
+[![License](https://img.shields.io/badge/license-MIT-00E1FF?style=for-the-badge&labelColor=080C16)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%2B-FF941A?style=for-the-badge&labelColor=080C16&logo=python&logoColor=white)](#requirements)
+
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-00E1FF?style=for-the-badge&labelColor=080C16)](https://code.claude.com/docs/en/plugins)
+[![MCP](https://img.shields.io/badge/MCP%20tools-18-FF941A?style=for-the-badge&labelColor=080C16)](#tools)
+[![Tests](https://img.shields.io/badge/tests-117-FF941A?style=for-the-badge&labelColor=080C16)](#running-the-tests)
+[![State](https://img.shields.io/badge/state-one%20JSON%20file-FF941A?style=for-the-badge&labelColor=080C16)](#file-structure)
+
+**[What it does](#what-it-does)** · **[Tools](#tools)** · **[The why field](#the-why-field)** · **[Verification gate](#verification-gate)** · **[Install](#installation)** · **[Web UI](#web-ui)**
+
+</div>
+
+---
 
 Solo workflow tracker for AI coding agents. Tracks tickets, priorities, dependencies, and blocked work across multiple projects via the Model Context Protocol.
 
 Built for Claude Code. Works with any MCP-compatible client.
+
+Ships alongside [K-mem](https://github.com/PyGuy2000/k-mem), which installs it as a dependency.
 
 ## What it does
 
@@ -75,6 +95,14 @@ Every ticket requires a `why` field: why the work exists and what it unblocks. T
 ```
 
 ## Verification gate
+
+<div align="center">
+
+<img src="docs/assets/verify-demo.png" alt="A ticket carrying a verify_cmd. Closing it is refused because nothing has verified it. Running the check fails on the current commit, and closing is refused again. After the code is fixed and committed the check passes, and the close is allowed with the passing revision recorded on the ticket." width="720">
+
+*Captured from a real run against a throwaway repo, not written by hand.*
+
+</div>
 
 A ticket can carry a `verify_cmd`: one shell command that proves the work is finished.
 
