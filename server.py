@@ -147,6 +147,77 @@ def create_project(
 
 
 @mcp.tool()
+def edit_project(
+    project: str,
+    goal: Optional[str] = None,
+    color: Optional[str] = None,
+    repo_path: Optional[str] = None,
+) -> dict:
+    """
+    Edit an existing project's fields. Only provided fields are updated.
+
+    Exists mainly to set repo_path after the fact. A project created without
+    one cannot run any ticket's verify_cmd, because the verifier has no working
+    directory, and create_project refuses a duplicate name, so before this tool
+    the only route was hand-editing the state file.
+
+    Args:
+        project: Project name or ID.
+        goal: New goal text.
+        color: New hex colour for the project badge.
+        repo_path: Absolute path to the project's checkout. Must be an existing
+                   directory; the verifier runs each verify_cmd there. Pass ""
+                   to clear it, which turns every verify_cmd in the project off.
+    """
+    if repo_path:
+        candidate = Path(repo_path).expanduser()
+        if not candidate.is_absolute():
+            return {"error": f"repo_path must be absolute, got '{repo_path}'."}
+        if not candidate.is_dir():
+            return {
+                "error": f"repo_path '{repo_path}' is not a directory.",
+                "hint": "The verifier runs verify_cmd there, so it has to exist now.",
+            }
+        repo_resolved = str(candidate)
+    else:
+        repo_resolved = repo_path  # "" clears it, None leaves it alone
+
+    def _apply(state):
+        proj = _resolve_project(state, project)
+        if not proj:
+            abort({"error": f"Project '{project}' not found."})
+
+        updates = {}
+        if goal is not None:
+            updates["goal"] = goal
+        if color is not None:
+            updates["color"] = color
+        if repo_resolved is not None:
+            updates["repoPath"] = repo_resolved
+
+        if not updates:
+            abort({"error": "Nothing to update. Pass goal, color or repo_path."})
+
+        proj.update(updates)
+        return {"success": True, "project": proj, "updated": sorted(updates)}
+
+    result = mutate_state(_apply)
+
+    # A path that is not a git checkout is allowed; the verifier then records no
+    # revision and skips the staleness check. Say so rather than letting the
+    # caller discover it on the first refused close.
+    if result.get("success") and repo_resolved:
+        result["git_rev"] = _git_rev(repo_resolved)
+        if result["git_rev"] is None:
+            result["note"] = (
+                f"'{repo_resolved}' is not a git checkout. verify_cmd will still run "
+                "there, but proof cannot be pinned to a revision, so a stale pass "
+                "will not be caught."
+            )
+    return result
+
+
+@mcp.tool()
 def add_ticket(
     title: str,
     why: str,

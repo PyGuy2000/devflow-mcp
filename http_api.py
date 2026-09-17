@@ -51,8 +51,8 @@ def _resolve_project(state: dict, identifier: str):
 def create_ticket(body: dict) -> tuple[dict, int]:
     """Create a ticket from an HTTP payload. Returns (response_json, status).
 
-    Browser-facing twin of server.py's add_ticket (T-106 Phase 3: KBVault's
-    admin UI creates tickets from endorsed recommendations). No blocked_by
+    Browser-facing twin of server.py's add_ticket, for an external admin page
+    that turns an approved recommendation into a ticket. No blocked_by
     support — dependencies stay an MCP/agent concern.
     """
     title = (body.get("title") or "").strip()
@@ -218,9 +218,9 @@ class DevFlowHandler(BaseHTTPRequestHandler):
                 self._json_response(result)
 
         elif self.path == "/api/ticket":
-            # Create a ticket (T-106 Phase 3: KBVault endorsement → ticket).
+            # Create a ticket from an external page's approved recommendation.
             # Token-gated: this server is CORS-open, so the write must carry
-            # the shared secret only trusted pages (KBVault admin) hold.
+            # the shared secret only trusted admin pages hold.
             import hmac
             token = _api_token()
             if not token:

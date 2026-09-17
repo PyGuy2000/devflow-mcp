@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - A CI workflow. It runs all six test suites, one suite per step so a red run names the file that broke. See the matrix note below for what it runs them against.
+- `edit_project`, to change an existing project's goal, colour or `repo_path`. Without it a project created with no `repo_path` could never run a ticket's `verify_cmd`, because the verifier had no working directory and `create_project` refuses a duplicate name. The only fix was editing the state file by hand.
 - `CONTRIBUTING.md` and `SECURITY.md`.
 - Brand images built by `scripts/make_brand_images.py`: a README banner, a social preview card, and a terminal card showing the verification gate, captured from a real run.
 
@@ -19,6 +20,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- `test_adr_config.py` reported fewer passes than it ran. It re-runs itself in a second process to test the no-config defaults, folded that run's failures into its own tally but not its passes, so the summary said 16 where 21 checks had passed. Failures were always counted, so nothing was hidden.
 - The documented install no longer breaks on a new machine. `pip install mcp` resolves to 2.x, which `server.py` could not import, so a fresh install failed before any tool ran. Fixed first with a `mcp<2` pin, then properly by supporting both majors. The first CI run found this; every machine here already had 1.x installed.
 
 ## [0.1.0] - 2026-09-16

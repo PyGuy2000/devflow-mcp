@@ -245,6 +245,42 @@ r = server.verify_ticket("T-015")
 check("timeout reported as failure", r.get("passed") is False and r.get("exit") == 124, r)
 check("timeout explained in tail", "timeout" in r.get("tail", "").lower(), r)
 
+# ── edit_project: the only way to give an existing project a repoPath ─────
+#
+# A project created without repo_path cannot run any verify_cmd, and
+# create_project refuses a duplicate name, so without this tool the gate was
+# unreachable for every such project and the only fix was editing state by hand.
+
+print("edit_project repoPath:")
+write_state([make_ticket("T-030", verify_cmd="git rev-parse HEAD")], repo_path="")
+r = server.verify_ticket("T-030")
+check("no repoPath refuses the run", "repoPath" in r.get("error", ""), r)
+
+r = server.edit_project("test_project", repo_path="relative/path")
+check("relative path refused", "absolute" in r.get("error", ""), r)
+r = server.edit_project("test_project", repo_path=str(REPO / "does-not-exist"))
+check("missing directory refused", "not a directory" in r.get("error", ""), r)
+r = server.edit_project("test_project")
+check("no fields refused", "Nothing to update" in r.get("error", ""), r)
+r = server.edit_project("no_such_project", repo_path=str(REPO))
+check("unknown project refused", "not found" in r.get("error", ""), r)
+
+r = server.edit_project("test_project", repo_path=str(REPO))
+check("repoPath set", r.get("success") is True and r.get("updated") == ["repoPath"], r)
+check("git revision reported back", r.get("git_rev") == head(), r)
+
+r = server.verify_ticket("T-030")
+check("the gate runs once the path is set", r.get("passed") is True, r)
+check("proof pinned to the revision", r.get("rev") == head(), r)
+check("the close is allowed", server.update_ticket_status("T-030", "done").get("success") is True)
+
+r = server.edit_project("test_project", repo_path=str(PLAIN))
+check("a non-checkout is allowed", r.get("success") is True, r)
+check("but says proof cannot be pinned", "not a git checkout" in r.get("note", ""), r)
+
+r = server.edit_project("test_project", goal="a new goal", color="#ff0000")
+check("goal and colour update too", r.get("updated") == ["color", "goal"], r)
+
 shutil.rmtree(_tmpdir, ignore_errors=True)
 
 print(f"\n{passed} passed, {failed} failed")

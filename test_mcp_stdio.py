@@ -72,8 +72,8 @@ async def run() -> int:
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = {t.name for t in (await session.list_tools()).tools}
-            check("18 tools listed", len(tools) >= 18, sorted(tools))
-            for name in ("create_project", "add_ticket", "get_ticket", "get_status_report", "refresh_adr_index", "list_adrs"):
+            check("19 tools listed", len(tools) >= 19, sorted(tools))
+            for name in ("create_project", "edit_project", "add_ticket", "get_ticket", "get_status_report", "refresh_adr_index", "list_adrs"):
                 check(f"tool {name} present", name in tools)
             check("state file absent before the first write", not (tmp / "devflow_state.json").exists())
             r = _payload(await session.call_tool("create_project", {"name": "fresh_app", "goal": "prove the install"}))

@@ -11,6 +11,7 @@ a subprocess with NO config to prove the defaults hold (every domain is
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -113,6 +114,13 @@ if MODE == "configured":
     if r.returncode != 0:
         failed += 1
         print(r.stderr)
+    else:
+        # Fold the child's tally in, so the printed total matches the PASS lines
+        # above it. Without this the summary silently under-reports by however
+        # many checks the defaults run makes.
+        m = re.search(r"^(\d+) passed", r.stdout, re.M)
+        if m:
+            passed += int(m.group(1))
 else:
     print("defaults (no config.json):")
     check("nothing scanned without roots except project repo paths", repos == ["registered_app"], repos)
