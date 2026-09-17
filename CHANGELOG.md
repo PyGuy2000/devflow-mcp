@@ -20,12 +20,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- The README's tool badge said 19 and the text said 18; the real count is 22, and the 0.1.0 tag had 21. Nobody had counted. The test badge, which counted print lines and moved three times in one session, is replaced by the suite count.
 - `test_adr_config.py` reported fewer passes than it ran. It re-runs itself in a second process to test the no-config defaults, folded that run's failures into its own tally but not its passes, so the summary said 16 where 21 checks had passed. Failures were always counted, so nothing was hidden.
 - The documented install no longer breaks on a new machine. `pip install mcp` resolves to 2.x, which `server.py` could not import, so a fresh install failed before any tool ran. Fixed first with a `mcp<2` pin, then properly by supporting both majors. The first CI run found this; every machine here already had 1.x installed.
 
 ## [0.1.0] - 2026-09-16
 
-First public release. 18 MCP tools over a single JSON state file.
+First public release. 21 MCP tools over a single JSON state file.
 
 ### Added
 

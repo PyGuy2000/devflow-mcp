@@ -8,8 +8,8 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-FF941A?style=for-the-badge&labelColor=080C16&logo=python&logoColor=white)](#requirements)
 
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-00E1FF?style=for-the-badge&labelColor=080C16)](https://code.claude.com/docs/en/plugins)
-[![MCP](https://img.shields.io/badge/MCP%20tools-19-FF941A?style=for-the-badge&labelColor=080C16)](#tools)
-[![Tests](https://img.shields.io/badge/tests-135-FF941A?style=for-the-badge&labelColor=080C16)](#running-the-tests)
+[![MCP](https://img.shields.io/badge/MCP%20tools-22-FF941A?style=for-the-badge&labelColor=080C16)](#tools)
+[![Tests](https://img.shields.io/badge/test%20suites-6-FF941A?style=for-the-badge&labelColor=080C16)](#running-the-tests)
 [![State](https://img.shields.io/badge/state-one%20JSON%20file-FF941A?style=for-the-badge&labelColor=080C16)](#file-structure)
 
 **[What it does](#what-it-does)** · **[Tools](#tools)** · **[The why field](#the-why-field)** · **[Verification gate](#verification-gate)** · **[Install](#installation)** · **[Web UI](#web-ui)**
@@ -38,7 +38,7 @@ The web UI server (`http_api.py`) also refuses to double-launch: it doesn't set 
 
 ## Tools
 
-19 MCP tools organized in tiers:
+22 MCP tools organized in tiers:
 
 ### Daily work (Tier 1)
 - `create_project` — register a project with a name, goal, and optional `repo_path`
@@ -383,7 +383,7 @@ python3 test_mcp_stdio.py
 
 Each builds its own temp state file and cleans up after itself; none of them touch your real `devflow_state.json`.
 
-135 checks in total. Four suites print their own count; `test_stale_write_guard.py` and `test_concurrency.py` print a verdict instead, and contribute 13 and 7.
+Four suites print their own pass count. `test_stale_write_guard.py` and `test_concurrency.py` print a verdict. Every suite exits non-zero on any failure, which is what CI checks.
 
 ## Requirements
 
