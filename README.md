@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-FF941A?style=for-the-badge&labelColor=080C16&logo=python&logoColor=white)](#requirements)
 
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-00E1FF?style=for-the-badge&labelColor=080C16)](https://code.claude.com/docs/en/plugins)
-[![MCP](https://img.shields.io/badge/MCP%20tools-22-FF941A?style=for-the-badge&labelColor=080C16)](#tools)
+[![MCP](https://img.shields.io/badge/MCP%20tools-23-FF941A?style=for-the-badge&labelColor=080C16)](#tools)
 [![Tests](https://img.shields.io/badge/test%20suites-6-FF941A?style=for-the-badge&labelColor=080C16)](#running-the-tests)
 [![State](https://img.shields.io/badge/state-one%20JSON%20file-FF941A?style=for-the-badge&labelColor=080C16)](#file-structure)
 
@@ -38,7 +38,7 @@ The web UI server (`http_api.py`) also refuses to double-launch: it doesn't set 
 
 ## Tools
 
-22 MCP tools organized in tiers:
+23 MCP tools organized in tiers:
 
 ### Daily work (Tier 1)
 - `create_project` — register a project with a name, goal, and optional `repo_path`
@@ -232,6 +232,12 @@ On the first run it also creates `~/.config/devflow-mcp/config.json` and tells y
 ## ADR index
 
 `refresh_adr_index` builds `adr_index.json`: every ADR across your repos with a collision-proof uid (`<project>:ADR-NNN`), a Layer x Domain classification, a resolved status, and typed edges to other ADRs and to tickets. `list_adrs` filters it; `get_adr` returns one record in full. The web UI renders it as the Decisions view.
+
+### Themes
+
+A theme is the open question a run of ADRs and tickets was written to answer. You author it in a JSON file named by `adr_themes_file` (default `<config dir>/themes.json`): a title, a `done_when` test, your `verdict` (`open`, `addressed`, `parked`, `dropped`), which ADR uids belong to it, and how tickets join it (`ticket_projects`, `ticket_title_match`, or the theme id written in a ticket's `why`). `list_themes`, `GET /api/themes` and `python3 adr_themes.py --brief` derive the rest on every call: ADR counts, open and total tickets, last activity, and four flags (`needs_verdict`, `quiet_30d`, `no_adr`, `no_tickets`).
+
+A theme closes only on a verdict. When every ticket is done and nobody has said whether the question was answered, it raises `needs_verdict`, which is the case an EPIC hides by closing itself.
 
 Which repos are indexed: every project's `repo_path`, plus every directory one level under each entry of `adr_repo_roots` in `config.json`. The Layer axis is fixed (ui, chatbot, agentic, etl, datasets, plugins-engines, infra, security, ops). The Domain axis is yours:
 

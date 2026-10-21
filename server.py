@@ -1897,6 +1897,29 @@ def refresh_adr_index() -> dict:
 
 
 @mcp.tool()
+def list_themes(flagged_only: bool = False) -> dict:
+    """
+    List themes: the open questions a run of ADRs and tickets was written to answer.
+
+    Membership, done_when and the owner's verdict are authored in the themes
+    file (config key adr_themes_file). Counts, last activity and flags are
+    derived on every call from the ADR index and ticket state. A theme closes
+    only on a verdict; "needs_verdict" means every ticket is done and nobody
+    has said whether the question was answered.
+
+    Args:
+        flagged_only: True returns only the brief (needs_verdict, quiet_30d,
+            no_adr, unsorted ADRs) instead of every theme.
+    """
+    from adr_themes import brief, compute
+
+    result = compute()
+    if "error" in result or not flagged_only:
+        return result
+    return brief(result)
+
+
+@mcp.tool()
 def get_adr(uid: str) -> dict:
     """
     Get one ADR in full, including its section prose, edges, and linked tickets.

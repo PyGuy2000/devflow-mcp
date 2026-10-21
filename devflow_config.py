@@ -26,6 +26,7 @@ Keys:
     adr_exclude_dirs        repo directory names never indexed (stale worktrees, copies)
     adr_exclude_path_parts  path segments inside a repo that mark a copy (a docs preview, say)
     adr_overrides_file      per-uid layer/domain corrections; default <config dir>/adr_categories.json
+    adr_themes_file         the theme registry read by adr_themes.py; default <config dir>/themes.json
     adr_domains             {"key": "Label"}; the Domain axis of the Decisions view
     adr_project_domains     {"repo dir name": "domain key"}; the default domain per repo
     adr_domain_keywords     {"domain key": ["keyword", ...]}; title/decision hits move an ADR
@@ -57,6 +58,7 @@ DEFAULT_CONFIG: dict = {
     "adr_exclude_dirs": [],
     "adr_exclude_path_parts": [],
     "adr_overrides_file": "",
+    "adr_themes_file": "",
     "adr_domains": {},
     "adr_project_domains": {},
     "adr_domain_keywords": {},
@@ -87,6 +89,11 @@ def expand(path: str | os.PathLike | None) -> Path | None:
 def overrides_file(config: dict | None = None) -> Path:
     config = config or load_config()
     return expand(config.get("adr_overrides_file")) or (CONFIG_DIR / "adr_categories.json")
+
+
+def themes_file(config: dict | None = None) -> Path:
+    config = config or load_config()
+    return expand(config.get("adr_themes_file")) or (CONFIG_DIR / "themes.json")
 
 
 def ensure_config_dir() -> bool:
