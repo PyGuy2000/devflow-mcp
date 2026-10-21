@@ -51,5 +51,7 @@ jobs:
         run: python test_verifier.py
       - name: ADR config
         run: python test_adr_config.py
+      - name: ADR themes
+        run: python test_adr_themes.py
       - name: MCP stdio handshake
         run: python test_mcp_stdio.py

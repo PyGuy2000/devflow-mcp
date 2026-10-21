@@ -157,6 +157,13 @@ class DevFlowHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(index).encode())
 
+        elif self.path == "/api/themes":
+            # Theme status, derived on every request from the themes file,
+            # the ADR index and ticket state. Read-only.
+            from adr_themes import compute
+            result = compute()
+            self._json_response(result, 404 if "error" in result else 200)
+
         elif self.path == "/api/health":
             self._json_response({"status": "ok", "state_file": str(STATE_FILE)})
 

@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Themes over the ADR index: `adr_themes.py`, the `list_themes` tool, `GET /api/themes`, the config key `adr_themes_file`, and `test_adr_themes.py`. Membership, `done_when` and the verdict are authored in a JSON file; counts, last activity and the flags `needs_verdict`, `quiet_30d`, `no_adr` and `no_tickets` are derived on every call. A theme closes only on a verdict, so a question whose tickets all closed still shows up until someone says whether it was answered.
+
 - A CI workflow. It runs all six test suites, one suite per step so a red run names the file that broke. See the matrix note below for what it runs them against.
 - `edit_project`, to change an existing project's goal, colour or `repo_path`. Without it a project created with no `repo_path` could never run a ticket's `verify_cmd`, because the verifier had no working directory and `create_project` refuses a duplicate name. The only fix was editing the state file by hand.
 - `CONTRIBUTING.md` and `SECURITY.md`.

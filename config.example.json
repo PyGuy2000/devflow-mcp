@@ -11,6 +11,7 @@
   "adr_exclude_dirs": [],
   "adr_exclude_path_parts": [],
   "adr_overrides_file": "",
+  "adr_themes_file": "",
   "adr_domains": {},
   "adr_project_domains": {},
   "adr_domain_keywords": {},

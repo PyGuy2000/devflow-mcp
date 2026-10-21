@@ -22,10 +22,11 @@ python3 test_stale_write_guard.py
 python3 test_tools.py
 python3 test_verifier.py
 python3 test_adr_config.py
+python3 test_adr_themes.py
 python3 test_mcp_stdio.py
 ```
 
-Each builds its own temp state file and cleans up after itself. None of them touch your real `devflow_state.json`. CI runs all six as separate steps so a red run names the suite that broke.
+Each builds its own temp state file and cleans up after itself. None of them touch your real `devflow_state.json`. CI runs all seven as separate steps so a red run names the suite that broke.
 
 ## The state file is the thing to be careful with
 
@@ -44,7 +45,8 @@ If you change anything that writes state, `test_concurrency.py` and `test_stale_
 ```
 python3 test_concurrency.py && python3 test_stale_write_guard.py && \
 python3 test_tools.py && python3 test_verifier.py && \
-python3 test_adr_config.py && python3 test_mcp_stdio.py
+python3 test_adr_config.py && python3 test_adr_themes.py && \
+python3 test_mcp_stdio.py
 claude plugin validate . --strict
 ```
 
