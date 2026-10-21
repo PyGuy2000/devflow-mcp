@@ -99,6 +99,14 @@ check("unknown theme id reported, buckets are known", r["unknown_theme_ids"] == 
 b = brief(r)
 check("brief lists only flagged themes", {x["id"] for x in b["needs_verdict"]} == {"TH-02"} and b["counts"]["themes"] == 6, b)
 
+print("bad input:")
+bad = json.loads(json.dumps(registry))
+bad["themes"][2]["ticket_title_match"] = "(unclosed"
+rb = rollup(bad, index, {"tickets": state["tickets"] + [{"id": "T-8", "status": "backlog", "projectId": "proj-app"}]}, now_ms=NOW)
+check("an invalid pattern is reported and the rollup still runs",
+      [p["id"] for p in rb["bad_patterns"]] == ["TH-03"] and len(rb["themes"]) == 6, rb["bad_patterns"])
+check("a ticket with no title does not crash the title match", "T-8" not in {i for x in rb["themes"] for i in x["open_ticket_ids"]})
+
 print("config:")
 missing = compute()
 check("no themes file is an error, not a crash", "error" in missing and missing["themes"] == [], missing)
@@ -107,6 +115,9 @@ themes_path.write_text(json.dumps(registry))
 (CONFIG_DIR / "config.json").write_text(json.dumps({"adr_themes_file": str(themes_path)}))
 got = compute()
 check("adr_themes_file is read", got.get("counts", {}).get("themes") == 6, got)
+themes_path.write_text("{ not json")
+broken = compute()
+check("a malformed themes file is an error, not a crash", "unreadable" in broken.get("error", "") and broken["themes"] == [], broken)
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

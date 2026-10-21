@@ -25,9 +25,10 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIVE="${DEVFLOW_LIVE_DIR:-$HOME/.config/devflow-mcp}"
 FILES=(server.py state_store.py devflow_config.py http_api.py
-       github_activity_sync.py adr_parse.py adr_categories.py adr_index.py adr_apply_review.py
+       github_activity_sync.py adr_parse.py adr_categories.py adr_index.py adr_apply_review.py adr_themes.py
        devflow.html config.example.json hooks/session-status.py hooks/hooks.json
-       test_tools.py test_verifier.py test_stale_write_guard.py test_concurrency.py test_adr_config.py)
+       test_tools.py test_verifier.py test_stale_write_guard.py test_concurrency.py test_adr_config.py
+       test_adr_themes.py)
 
 case "${1:-}" in
   install)
