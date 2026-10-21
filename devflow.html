@@ -480,6 +480,57 @@
     padding: 0 3px;
   }
 
+  /* ── Themes view ─────────────────────────────────────────────────────────
+     One row per theme from GET /api/themes. Read-only: verdicts are
+     authored in the themes file, never from this page. */
+
+  #theme-view { display: none; }
+
+  .theme-list { display: flex; flex-direction: column; gap: 6px; }
+  .theme-row {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--text-muted);
+    border-radius: 7px;
+    padding: 8px 11px;
+    cursor: pointer;
+    display: grid;
+    grid-template-columns: 52px 1fr auto;
+    gap: 2px 10px;
+    align-items: baseline;
+  }
+  .theme-row:hover { background: var(--surface2); border-color: var(--border-bright); }
+  .theme-row.selected { background: var(--surface2); border-color: var(--accent); }
+  .theme-id { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+  .theme-title { font-size: 13px; color: var(--text); }
+  .theme-meta {
+    grid-column: 2 / 4;
+    font-size: 10px;
+    font-family: var(--mono);
+    color: var(--text-muted);
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .theme-flag {
+    font-size: 9px;
+    font-family: var(--mono);
+    padding: 1px 6px;
+    border-radius: 10px;
+    border: 1px solid rgba(245,166,35,0.4);
+    color: var(--amber);
+  }
+  .theme-flag.needs_verdict { border-color: rgba(255,95,122,0.5); color: var(--red); }
+  .theme-group {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    margin: 10px 0 2px;
+  }
+
   .column {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -1088,6 +1139,10 @@
         <span style="font-size:14px">◈</span> Decisions
         <span class="project-count" id="view-adrs">0</span>
       </div>
+      <div class="project-item" onclick="filterView('themes', this)">
+        <span style="font-size:14px">◎</span> Themes
+        <span class="project-count" id="view-themes">0</span>
+      </div>
     </div>
     <div class="sidebar-divider"></div>
     <div class="sidebar-section">
@@ -1187,6 +1242,22 @@
           <span style="color:var(--purple)">▬ dashed ring = cross-project</span>
         </div>
       </div>
+    </div>
+
+    <!-- Themes view: the questions behind the ADRs. Replaces the kanban columns when active. -->
+    <div id="theme-view">
+      <div class="adr-toolbar">
+        <select class="adr-select" id="theme-f-show" onchange="renderThemeView()">
+          <option value="flagged">Flagged</option>
+          <option value="open" selected>Open verdict</option>
+          <option value="">All themes</option>
+        </select>
+        <input class="adr-search" id="theme-f-search" placeholder="Filter by title or id…"
+               oninput="renderThemeView()" autocomplete="off" />
+        <button class="filter-btn" onclick="loadThemes(true)">Refresh</button>
+        <div class="adr-health" id="theme-health"></div>
+      </div>
+      <div class="theme-list" id="theme-list"></div>
     </div>
   </main>
 
@@ -1524,6 +1595,8 @@ function render() {
   // the last selected ticket over it would silently swap the panel's subject.
   if (state.activeFilter === 'adrs') {
     if (selectedAdr) renderAdrDetail(selectedAdr);
+  } else if (state.activeFilter === 'themes') {
+    if (selectedTheme) renderThemeDetail(selectedTheme);
   } else if (state.selectedTicket) {
     renderDetail(state.selectedTicket);
   }
@@ -1902,7 +1975,7 @@ function filterView(view, el) {
   state.selectedProject = 'all';
   document.querySelectorAll('.project-item').forEach(e => e.classList.remove('active'));
   el.classList.add('active');
-  const titles = { all:'All Tickets', blocked:'Blocked Tickets', 'critical-path':'Critical Path', adrs:'Decisions — ADR Map' };
+  const titles = { all:'All Tickets', blocked:'Blocked Tickets', 'critical-path':'Critical Path', adrs:'Decisions — ADR Map', themes:'Themes — where each question landed' };
   document.getElementById('board-title').textContent = titles[view];
   applyViewMode();
   render();
@@ -1913,11 +1986,14 @@ function filterView(view, el) {
 // nothing here. Everything else (header, search, detail panel) stays put.
 function applyViewMode() {
   const isAdr = state.activeFilter === 'adrs';
-  document.querySelector('.columns').style.display = isAdr ? 'none' : 'grid';
+  const isTheme = state.activeFilter === 'themes';
+  document.querySelector('.columns').style.display = isAdr || isTheme ? 'none' : 'grid';
   document.getElementById('adr-view').style.display = isAdr ? 'block' : 'none';
+  document.getElementById('theme-view').style.display = isTheme ? 'block' : 'none';
   const ctrls = document.querySelector('.board-controls');
-  if (ctrls) ctrls.style.display = isAdr ? 'none' : 'flex';
+  if (ctrls) ctrls.style.display = isAdr || isTheme ? 'none' : 'flex';
   if (isAdr) loadAdrs();
+  if (isTheme) loadThemes(true);
 }
 
 // ══ DECISIONS VIEW (ADR MAP) ═══════════════════════════════════════════════
@@ -2212,6 +2288,206 @@ function jumpToTicket(id) {
     .find(e => e.textContent.includes('All Tickets'));
   if (el) filterView('all', el);
   selectTicket(id);
+}
+
+// ══ THEMES VIEW ════════════════════════════════════════════════════════════
+//
+// A theme is the question behind a run of ADRs and tickets. GET /api/themes
+// derives every count and flag on each request from the themes file, the ADR
+// index and ticket state (adr_themes.py). This view only reads: a verdict is
+// authored in the themes file, never here.
+
+let themeData = null;
+let selectedTheme = null;
+
+const THEME_VERDICT_COLOR = {
+  open: 'var(--amber)', addressed: 'var(--green)', parked: 'var(--text-muted)', dropped: 'var(--purple)',
+};
+const THEME_FLAG_LABEL = {
+  needs_verdict: 'needs verdict', quiet_30d: 'quiet 30d', no_adr: 'no ADR', no_tickets: 'no tickets',
+};
+
+async function loadThemes(show) {
+  const list = document.getElementById('theme-list');
+  if (show && !themeData) list.innerHTML = `<div style="color:var(--text-dim);font-size:12px;padding:20px">Loading themes…</div>`;
+  let res;
+  try {
+    res = await fetch(`${DEVFLOW_API}/api/themes`);
+  } catch (e) {
+    if (show) list.innerHTML = `<div style="color:var(--red);font-size:12px;padding:20px">DevFlow API unreachable — the Themes view needs http_api.py running.</div>`;
+    return;
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (show) list.innerHTML = `<div style="color:var(--amber);font-size:12px;padding:20px">
+      ${escapeHtml(body.error || 'Could not load themes.')}<br>
+      <span style="color:var(--text-dim)">Set <code>adr_themes_file</code> in config.json to the themes file.</span></div>`;
+    return;
+  }
+  themeData = body;
+  document.getElementById('view-themes').textContent = themeData.counts.open;
+  if (state.activeFilter === 'themes') {
+    renderThemeView();
+    if (selectedTheme) renderThemeDetail(selectedTheme);
+  }
+}
+
+// Flagged themes first (needs_verdict leads), then live open themes, then
+// ongoing / settled / answered ones. Inside a group: theme id order.
+function themeRank(r) {
+  if (r.flags.includes('needs_verdict')) return 0;
+  if (r.flags.length) return 1;
+  if (r.verdict === 'open' && r.kind === 'theme') return 2;
+  return 3;
+}
+const THEME_GROUP_LABEL = ['Needs your verdict', 'Flagged', 'Open', 'Ongoing, settled or answered'];
+
+function renderThemeView() {
+  if (!themeData) return;
+  renderThemeHealth();
+  const show = document.getElementById('theme-f-show').value;
+  const q = document.getElementById('theme-f-search').value.trim().toLowerCase();
+  const rows = themeData.themes
+    .filter(r => {
+      if (show === 'flagged' && !r.flags.length) return false;
+      if (show === 'open' && r.verdict !== 'open') return false;
+      if (q && !(r.title.toLowerCase().includes(q) || r.id.toLowerCase().includes(q))) return false;
+      return true;
+    })
+    .sort((a, b) => themeRank(a) - themeRank(b) || a.id.localeCompare(b.id));
+
+  const list = document.getElementById('theme-list');
+  if (!rows.length) {
+    list.innerHTML = `<div style="color:var(--text-dim);font-size:12px;padding:20px">No themes match these filters.</div>`;
+    return;
+  }
+  let html = '';
+  let group = -1;
+  rows.forEach(r => {
+    const g = themeRank(r);
+    if (g !== group) { group = g; html += `<div class="theme-group">${THEME_GROUP_LABEL[g]}</div>`; }
+    html += buildThemeRow(r);
+  });
+  list.innerHTML = html;
+}
+
+function buildThemeRow(r) {
+  const color = THEME_VERDICT_COLOR[r.verdict] || 'var(--text-muted)';
+  const flags = r.flags.map(f => `<span class="theme-flag ${f}">${THEME_FLAG_LABEL[f] || f}</span>`).join('');
+  return `<div class="theme-row ${selectedTheme === r.id ? 'selected' : ''}" style="border-left-color:${color}"
+               onclick="selectTheme('${r.id}')">
+    <span class="theme-id">${r.id}</span>
+    <span class="theme-title">${escapeHtml(r.title)}</span>
+    <span class="dep-status-chip" style="background:${color}22;color:${color};border:1px solid ${color}44">
+      ${r.kind === 'theme' ? r.verdict : r.kind}</span>
+    <div class="theme-meta">
+      <span title="ADRs that name this theme first / in total">ADRs ${r.adrs_primary}/${r.adrs_total}</span>
+      <span title="Open / total tickets">tickets ${r.tickets_open}/${r.tickets_total}</span>
+      <span>last ${r.last_activity || '—'}</span>
+      ${flags}
+    </div>
+  </div>`;
+}
+
+function renderThemeHealth() {
+  const c = themeData.counts;
+  const items = [
+    [`${c.open} open`, false],
+    [`${c.needs_verdict} need verdict`, c.needs_verdict > 0],
+    [`${c.quiet_30d} quiet 30d`, c.quiet_30d > 0],
+    [`${c.no_adr} no ADR`, false],
+    [`${themeData.unsorted_adrs.length} unsorted ADRs`, themeData.unsorted_adrs.length > 0],
+  ];
+  if (themeData.unknown_theme_ids.length) items.push([`${themeData.unknown_theme_ids.length} unknown ids`, true]);
+  if (themeData.bad_patterns.length) items.push([`${themeData.bad_patterns.length} bad patterns`, true]);
+  const tips = {
+    'unsorted ADRs': themeData.unsorted_adrs.join(', '),
+    'unknown ids': themeData.unknown_theme_ids.join(', '),
+    'bad patterns': themeData.bad_patterns.map(p => `${p.id}: ${p.error}`).join('; '),
+  };
+  document.getElementById('theme-health').innerHTML = items.map(([label, warn]) => {
+    const tip = Object.entries(tips).find(([k]) => label.endsWith(k));
+    return `<span class="adr-health-pill ${warn ? 'warn' : ''}" title="${escapeHtml(tip ? tip[1] : label)}">${label}</span>`;
+  }).join('');
+}
+
+function selectTheme(id) {
+  selectedTheme = id;
+  renderThemeView();
+  renderThemeDetail(id);
+}
+
+function renderThemeDetail(id) {
+  const r = themeData && themeData.themes.find(x => x.id === id);
+  if (!r) return;
+  document.getElementById('panel-empty').style.display = 'none';
+  const content = document.getElementById('panel-content');
+  content.style.display = 'flex';
+
+  const color = THEME_VERDICT_COLOR[r.verdict] || 'var(--text-muted)';
+  const statusColors = { backlog:'#454d6a', active:'#4f7cff', blocked:'#ff5f7a', done:'#2dd4a0' };
+  const byUid = adrIndex ? Object.fromEntries(adrIndex.adrs.map(a => [a.uid, a])) : {};
+
+  const adrRow = uid => {
+    const a = byUid[uid];
+    return `<div class="adr-edge-row">
+      <span class="adr-edge-ref" onclick="openAdrFromTheme('${uid}')">${a ? `${a.adrId} — ${escapeHtml(a.title.slice(0, 70))}` : uid}</span>
+      ${a ? `<span class="adr-xproj">${a.repoName}</span>` : ''}
+    </div>`;
+  };
+  const primary = r.adr_uids.slice(0, r.adrs_primary);
+  const secondary = r.adr_uids.slice(r.adrs_primary);
+
+  const ticketRows = r.open_ticket_ids.length
+    ? r.open_ticket_ids.map(tid => {
+        const t = getTicket(tid);
+        if (!t) return `<div class="adr-edge-row" style="color:var(--text-muted)">${tid} (not in this board)</div>`;
+        const c = statusColors[t.status];
+        return `<div class="adr-edge-row">
+          <span class="adr-edge-ref" onclick="jumpToTicket('${tid}')">${tid} — ${escapeHtml(t.title)}</span>
+          <span class="dep-status-chip" style="background:${c}22;color:${c};border:1px solid ${c}44">${t.status}</span>
+        </div>`;
+      }).join('')
+    : `<div style="font-size:11px;color:var(--text-muted)">No open tickets</div>`;
+  const byStatus = Object.entries(r.tickets_by_status).map(([s, n]) => `${n} ${s}`).join(' · ') || 'none';
+
+  content.innerHTML = `
+    <div class="panel-header">
+      <span class="panel-ticket-id">${r.id} · ${r.kind}</span>
+      <span class="dep-status-chip" style="background:${color}22;color:${color};border:1px solid ${color}44">${r.verdict}</span>
+    </div>
+    <div style="padding:14px 16px;overflow-y:auto;flex:1">
+      <div style="font-size:14px;line-height:1.45;margin-bottom:8px">${escapeHtml(r.title)}</div>
+      ${r.flags.length ? `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">${r.flags.map(f => `<span class="theme-flag ${f}">${THEME_FLAG_LABEL[f] || f}</span>`).join('')}</div>` : ''}
+
+      <div class="adr-sec-title">Done when</div>
+      <div class="adr-sec-body">${escapeHtml(r.done_when || 'not written')}</div>
+
+      <div class="adr-sec-title">Verdict</div>
+      <div style="font-size:11px;color:var(--text-dim);line-height:1.5">
+        ${r.verdict}${r.verdict_date ? ` · ${r.verdict_date}` : ' · no verdict recorded yet'}
+        ${r.verdict_note ? `<br>${escapeHtml(r.verdict_note)}` : ''}
+      </div>
+
+      <div class="adr-sec-title">Open tickets (${r.tickets_open} of ${r.tickets_total}: ${byStatus})</div>
+      ${ticketRows}
+      <div style="font-size:10px;font-family:var(--mono);color:var(--text-muted);margin-top:4px">
+        last activity ${r.last_activity || '—'}${r.quiet_days != null ? ` (${r.quiet_days} days ago)` : ''}</div>
+
+      <div class="adr-sec-title">ADRs that name it first (${primary.length})</div>
+      ${primary.length ? primary.map(adrRow).join('') : `<div style="font-size:11px;color:var(--text-muted)">None</div>`}
+      ${secondary.length ? `<div class="adr-sec-title">ADRs that touch it (${secondary.length})</div>${secondary.map(adrRow).join('')}` : ''}
+    </div>
+  `;
+}
+
+// Leaves the Themes view for the Decisions view with that ADR selected.
+async function openAdrFromTheme(uid) {
+  const el = [...document.querySelectorAll('.project-item')]
+    .find(e => e.textContent.includes('Decisions'));
+  if (el) filterView('adrs', el);
+  await loadAdrs();
+  if (adrIndex && adrIndex.adrs.some(a => a.uid === uid)) selectAdr(uid);
 }
 
 // ── Scoped relationship graph ──
@@ -2565,6 +2841,7 @@ document.addEventListener('keydown', (e) => {
   // Warm the ADR index so the sidebar shows a real count before the view is
   // ever opened. Failure is silent — the Decisions view reports it properly.
   if (_apiAvailable) loadAdrs().catch(() => {});
+  if (_apiAvailable) loadThemes(false).catch(() => {});
 })();
 </script>
 </body>

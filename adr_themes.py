@@ -125,10 +125,13 @@ def rollup(registry: dict, index: dict, state: dict, now_ms: int | None = None) 
             "kind": kind,
             "verdict": verdict,
             "verdict_date": th.get("verdict_date"),
+            "verdict_note": th.get("verdict_note", ""),
             "done_when": th.get("done_when", ""),
             "adrs_primary": len(primary),
             "adrs_total": len(uids),
             "adr_status": dict(adr_status),
+            # Primary members first, so the panel can split them without a second list.
+            "adr_uids": sorted(primary) + sorted(u for u in uids if u not in primary),
             "tickets_open": open_n,
             "tickets_total": len(found),
             "tickets_by_status": dict(by_status),

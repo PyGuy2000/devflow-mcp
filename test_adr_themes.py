@@ -106,6 +106,18 @@ rb = rollup(bad, index, {"tickets": state["tickets"] + [{"id": "T-8", "status": 
 check("an invalid pattern is reported and the rollup still runs",
       [p["id"] for p in rb["bad_patterns"]] == ["TH-03"] and len(rb["themes"]) == 6, rb["bad_patterns"])
 check("a ticket with no title does not crash the title match", "T-8" not in {i for x in rb["themes"] for i in x["open_ticket_ids"]})
+# The run above loses TH-03's pattern, so the title guard is never reached there.
+# Here the pattern is valid and the title-less ticket sits in a title_match project.
+rt = rollup(registry, index, {"tickets": state["tickets"] + [{"id": "T-8", "status": "backlog", "projectId": "proj-app"}]}, now_ms=NOW)
+check("a title-less ticket reaches a valid pattern without crashing",
+      {x["id"]: x for x in rt["themes"]}["TH-03"]["open_ticket_ids"] == ["T-4"], rt["themes"][2])
+
+print("panel fields:")
+check("adr_uids lists the member ADRs", rows["TH-01"]["adr_uids"] == ["app:ADR-001"] and rows["TH-04"]["adr_uids"] == ["app:ADR-001"], rows["TH-04"])
+check("adr_uids empty when no ADR names the theme", rows["TH-03"]["adr_uids"] == [])
+reg_note = json.loads(json.dumps(registry))
+reg_note["themes"][4]["verdict_note"] = "Rob: done."
+check("verdict_note is passed through", rollup(reg_note, index, state, now_ms=NOW)["themes"][4]["verdict_note"] == "Rob: done.")
 
 print("config:")
 missing = compute()
