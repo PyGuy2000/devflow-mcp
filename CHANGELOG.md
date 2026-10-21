@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- A Themes view in `devflow.html` over `GET /api/themes`. Rows are grouped (needs verdict, flagged, open, the rest) and filtered by flagged, open verdict or all; the detail panel shows `done_when`, the verdict with its date and note, the open tickets and the member ADRs, and an ADR click opens the Decisions view on it. Read-only. Rows from `adr_themes.rollup` now also carry `adr_uids` (primary members first) and `verdict_note`.
+
 - Themes over the ADR index: `adr_themes.py`, the `list_themes` tool, `GET /api/themes`, the config key `adr_themes_file`, and `test_adr_themes.py`. Membership, `done_when` and the verdict are authored in a JSON file; counts, last activity and the flags `needs_verdict`, `quiet_30d`, `no_adr` and `no_tickets` are derived on every call. A theme closes only on a verdict, so a question whose tickets all closed still shows up until someone says whether it was answered.
 
 - A CI workflow. It runs all six test suites, one suite per step so a red run names the file that broke. See the matrix note below for what it runs them against.

@@ -239,6 +239,8 @@ A theme is the open question a run of ADRs and tickets was written to answer. Yo
 
 A theme closes only on a verdict. When every ticket is done and nobody has said whether the question was answered, it raises `needs_verdict`, which is the case an EPIC hides by closing itself.
 
+The web UI has a **Themes** view over the same endpoint: one row per theme, the ones that need a verdict first, and a panel with the `done_when` test, the verdict and its note, the open tickets and the member ADRs. Clicking an ADR opens it in the Decisions view. The view only reads; you change a verdict in the themes file.
+
 Which repos are indexed: every project's `repo_path`, plus every directory one level under each entry of `adr_repo_roots` in `config.json`. The Layer axis is fixed (ui, chatbot, agentic, etl, datasets, plugins-engines, infra, security, ops). The Domain axis is yours:
 
 ```json
@@ -265,7 +267,7 @@ python3 http_api.py
 # Open http://localhost:7117
 ```
 
-The UI shows all projects, tickets, and status filters. No authentication (localhost only). Includes a global search across all projects, including ticket work logs.
+The UI shows all projects, tickets, and status filters, plus the Decisions (ADR map) and Themes views. No authentication (localhost only). Includes a global search across all projects, including ticket work logs.
 
 ![DevFlow web UI](docs/images/devflow-web-ui.png)
 
