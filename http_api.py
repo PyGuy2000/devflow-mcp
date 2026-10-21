@@ -161,7 +161,11 @@ class DevFlowHandler(BaseHTTPRequestHandler):
             # Theme status, derived on every request from the themes file,
             # the ADR index and ticket state. Read-only.
             from adr_themes import compute
-            result = compute()
+            try:
+                result = compute()
+            except Exception as e:  # a bad registry must answer, not drop the socket
+                self._json_response({"error": f"theme rollup failed: {e}", "themes": []}, 500)
+                return
             self._json_response(result, 404 if "error" in result else 200)
 
         elif self.path == "/api/health":

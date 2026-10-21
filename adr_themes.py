@@ -40,7 +40,11 @@ def load_themes(config: dict | None = None) -> dict:
     path = themes_file(config)
     if not path or not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {"_error": f"themes file {path} is unreadable: {e}"}
+    return data if isinstance(data, dict) else {"_error": f"themes file {path} is not a JSON object"}
 
 
 def _last_ms(ticket: dict) -> int:
@@ -65,6 +69,7 @@ def rollup(registry: dict, index: dict, state: dict, now_ms: int | None = None) 
         adrs_by_uid.setdefault(a["uid"], []).append(a)
 
     rows = []
+    bad_patterns = []
     for th in themes:
         tid = th["id"]
         uids = [u for u, ths in membership.items() if tid in ths]
@@ -78,13 +83,19 @@ def rollup(registry: dict, index: dict, state: dict, now_ms: int | None = None) 
                     members.add(t)
                     members.update(tickets.get(t, {}).get("blockedBy", []))
         projects = set(th.get("ticket_projects", []))
-        rx = re.compile(th["ticket_title_match"], re.I) if th.get("ticket_title_match") else None
+        rx = None
+        if th.get("ticket_title_match"):
+            try:
+                rx = re.compile(th["ticket_title_match"], re.I)
+            except re.error as e:
+                # One bad pattern loses that theme's title matches, not the whole rollup.
+                bad_patterns.append({"id": tid, "error": str(e)})
         tag = re.compile(rf"\b{re.escape(tid)}\b")
         for t in tickets.values():
             p = _project(t)
             if p in projects:
                 members.add(t["id"])
-            elif rx and p in match_projects and rx.search(t["title"]):
+            elif rx and p in match_projects and rx.search(t.get("title") or ""):
                 members.add(t["id"])
             elif tag.search((t.get("why") or "") + " " + (t.get("desc") or "")):
                 members.add(t["id"])
@@ -135,6 +146,7 @@ def rollup(registry: dict, index: dict, state: dict, now_ms: int | None = None) 
         "themes": rows,
         "unsorted_adrs": unsorted,
         "unknown_theme_ids": unknown,
+        "bad_patterns": bad_patterns,
         "counts": {
             "themes": len(rows),
             "open": sum(r["verdict"] == "open" for r in rows),
@@ -154,6 +166,8 @@ def compute(config: dict | None = None) -> dict:
     registry = load_themes(config)
     if not registry:
         return {"error": f"no themes file at {themes_file(config)} (config key adr_themes_file)", "themes": []}
+    if "_error" in registry:
+        return {"error": registry["_error"], "themes": []}
     return rollup(registry, load_index(), read_state())
 
 
@@ -173,6 +187,7 @@ def brief(result: dict) -> dict:
         "no_adr": pick("no_adr"),
         "unsorted_adrs": result.get("unsorted_adrs", []),
         "unknown_theme_ids": result.get("unknown_theme_ids", []),
+        "bad_patterns": result.get("bad_patterns", []),
     }
 
 
