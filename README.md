@@ -306,7 +306,7 @@ Configure in `~/.config/devflow-mcp/config.json` (`config.example.json` document
 }
 ```
 
-`api_token` gates the web UI's mutating routes (ticket creation, index refresh). It stays in this file on purpose: Claude Code strips environment variables whose names look like credentials from plugin MCP servers, so an env var would never reach the server.
+`api_token` gates every POST route, including the dashboard's saves. With no token set, the board is read-only. The dashboard asks for the token on the first save and keeps it in that browser's local storage. It stays in this file on purpose: Claude Code strips environment variables whose names look like credentials from plugin MCP servers, so an env var would never reach the server.
 
 ## Manifest ingestion
 

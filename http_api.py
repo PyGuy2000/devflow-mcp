@@ -6,6 +6,7 @@ Run: python3 http_api.py
 Serves on: http://localhost:7117
 """
 
+import hmac
 import json
 import os
 import time
@@ -32,13 +33,14 @@ _HTML_FILE = Path(__file__).resolve().parent / "devflow.html"
 
 
 def _api_token() -> str:
-    """Shared token required on mutating cross-origin routes.
+    """Shared token required on every POST route.
 
-    This server is CORS-open (Allow-Origin: *) for the dashboard, so an
-    unauthenticated write endpoint would be drive-by-callable from any
-    website the user has open. Fail-closed: no token configured → the
-    ticket-create endpoint refuses. Read per-request so adding the token
-    to config.json needs no restart.
+    This server is CORS-open (Allow-Origin: *) for the KBVault endorsement
+    pages, so an unauthenticated write endpoint would be drive-by-callable
+    from any website the user has open. A page can also skip the CORS
+    preflight with a text/plain POST, so CORS is no defence here; the token
+    is. Fail-closed: no token configured → every write refuses. Read
+    per-request so adding the token to config.json needs no restart.
     """
     try:
         with open(_CONFIG_FILE) as f:
@@ -185,9 +187,26 @@ class DevFlowHandler(BaseHTTPRequestHandler):
         else:
             self._json_response({"error": "Not found"}, 404)
 
+    def _write_refused(self) -> bool:
+        """Answer 403 or 401 and return True when this caller may not write."""
+        token = _api_token()
+        if not token:
+            self._json_response({"error": "writes disabled (no api_token in config.json)"}, 403)
+            return True
+        # Bytes, because compare_digest raises on a non-ASCII str.
+        supplied = self.headers.get("X-DevFlow-Token", "").encode()
+        if not hmac.compare_digest(supplied, token.encode()):
+            self._json_response({"error": "invalid or missing token"}, 401)
+            return True
+        return False
+
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(content_length)) if content_length else {}
+        raw_body = self.rfile.read(content_length) if content_length else b""
+        # One gate for every route, so a new write route cannot ship without it.
+        if self._write_refused():
+            return
+        body = json.loads(raw_body) if raw_body else {}
 
         if self.path == "/api/state":
             # Full state replacement (used by devflow.html saveState).
@@ -241,36 +260,11 @@ class DevFlowHandler(BaseHTTPRequestHandler):
 
         elif self.path == "/api/ticket":
             # Create a ticket from an external page's approved recommendation.
-            # Token-gated: this server is CORS-open, so the write must carry
-            # the shared secret only trusted admin pages hold.
-            import hmac
-            token = _api_token()
-            if not token:
-                self._json_response(
-                    {"error": "ticket creation disabled (no api_token in config.json)"}, 403
-                )
-                return
-            supplied = self.headers.get("X-DevFlow-Token", "")
-            if not hmac.compare_digest(supplied, token):
-                self._json_response({"error": "invalid or missing token"}, 401)
-                return
             data, status_code = create_ticket(body)
             self._json_response(data, status_code)
 
         elif self.path == "/api/adrs/refresh":
-            # Rebuild the ADR index from disk. Token-gated like /api/ticket:
-            # the server is CORS-open, and this walks 34 repos, so it must not
-            # be triggerable by any page that happens to be open.
-            import hmac
-            token = _api_token()
-            if not token:
-                self._json_response(
-                    {"error": "refresh disabled (no api_token in config.json)"}, 403
-                )
-                return
-            if not hmac.compare_digest(self.headers.get("X-DevFlow-Token", ""), token):
-                self._json_response({"error": "invalid or missing token"}, 401)
-                return
+            # Rebuild the ADR index from disk.
             try:
                 from adr_index import build, write_index
                 index = build(verbose=False)
