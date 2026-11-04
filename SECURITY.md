@@ -22,7 +22,7 @@ Worth knowing before you install it, because an MCP server runs with your permis
 
 `http_api.py` binds `127.0.0.1` on port 7117. It is not reachable from another machine unless you put something in front of it, which you should not do.
 
-Mutating routes are refused unless `api_token` is set in `config.json`. An empty token is the shipped default and leaves the UI read-only. The token is a local guard against a stray page or script, not an authentication system.
+Every POST route needs `api_token` from `config.json` in the `X-DevFlow-Token` header. An empty token is the shipped default and leaves the UI read-only. The token is a local guard against a stray page or script, not an authentication system. A process running as the same OS user can read `config.json` and the state file directly, so the token does not contain one.
 
 The server does not set `SO_REUSEADDR`, on purpose. A second instance fails to bind with a clear error instead of quietly sharing the port and racing the first one over the state file.
 

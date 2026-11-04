@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- `POST /api/state` and `POST /api/ticket/status` needed no token, so any web page open in the browser could replace the whole store. Every POST route now needs `api_token`, through one check at the top of `do_POST`, and fails closed when no token is set. The dashboard asks for the token on the first save and keeps it in local storage. Open tabs must reload. A non-ASCII token no longer drops the connection.
+
 ### Added
 
 - Ticket labels: a `labels` list on tickets, stored trimmed and lowercase. `add_ticket`, `edit_ticket` and `POST /api/ticket` set it, `list_tickets(label=...)` filters by it, and `devflow.html` shows a chip per label. Clicking a chip filters the board. Tickets written before this change have no `labels` key and read as having none.

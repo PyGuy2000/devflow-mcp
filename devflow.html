@@ -1482,11 +1482,7 @@ function saveState() {
       tickets: state.tickets,
       next_id: state.nextId
     };
-    fetch(`${DEVFLOW_API}/api/state`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    }).then(async res => {
+    postState(payload).then(async res => {
       // 409 = the server refused a stale snapshot (its next_id is ahead of
       // ours, i.e. this tab has been open across writes it never saw). Say so
       // loudly — a silent .catch() is what let the 2026-07-28 clobber look
@@ -1498,9 +1494,42 @@ function saveState() {
           'DevFlow: this tab is out of date, so your change was NOT saved.\n\n' +
           detail + '\n\nReload the page to pick up the current state, then redo it.'
         );
+      } else if (res.status === 401 || res.status === 403) {
+        alert(
+          'DevFlow: your change was NOT saved. ' + (res.status === 403
+            ? 'The server has no api_token in config.json, so the board is read-only.'
+            : 'The server needs the api_token from config.json.')
+        );
       }
     }).catch(() => {});
   }
+}
+
+// The server refuses writes without the api_token. The token is never in this
+// page, because the page is served to anything that can reach the port. A
+// person pastes it once and this browser keeps it.
+function storedToken() {
+  try { return localStorage.getItem('devflow_api_token') || ''; } catch(e) { return ''; }
+}
+
+function sendState(payload, token) {
+  return fetch(`${DEVFLOW_API}/api/state`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-DevFlow-Token': token },
+    body: JSON.stringify(payload)
+  });
+}
+
+async function postState(payload) {
+  const res = await sendState(payload, storedToken());
+  if (res.status !== 401) return res;
+  const token = (prompt('DevFlow needs the api_token from config.json to save. Paste it here:') || '').trim();
+  if (!token) return res;
+  const retry = await sendState(payload, token);
+  if (retry.ok) {
+    try { localStorage.setItem('devflow_api_token', token); } catch(e) {}
+  }
+  return retry;
 }
 
 // ── SEED DATA ──

@@ -60,11 +60,15 @@ def disk():
         return json.load(f)
 
 
-def post(port, payload):
+TOKEN = "test-token"
+
+
+def post(port, payload, path="/api/state", headers=None):
     req = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/state",
+        f"http://127.0.0.1:{port}{path}",
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "X-DevFlow-Token": TOKEN}
+        if headers is None else headers,
         method="POST",
     )
     try:
@@ -74,7 +78,61 @@ def post(port, payload):
         return e.code, json.loads(e.read())
 
 
+def check_write_gate(port):
+    """Every write route refuses a caller with no token, and changes nothing."""
+    good = {"projects": [], "tickets": [{"id": "T-495", "status": "backlog", "log": []}], "next_id": 900}
+    status_body = {"ticketId": "T-495", "status": "done"}
+    routes = [
+        ("/api/state", good),
+        ("/api/ticket/status", status_body),
+        ("/api/ticket", {"title": "t", "why": "w", "project": "proj"}),
+        ("/api/adrs/refresh", {}),
+    ]
+    json_only = {"Content-Type": "application/json"}
+
+    print("6. no token, wrong token, non-ASCII token: refused on every write route")
+    before = disk()
+    for path, body in routes:
+        st, _ = post(port, body, path, json_only)
+        check(f"{path} no token -> 401", st == 401, f"got {st}")
+        st, _ = post(port, body, path, {**json_only, "X-DevFlow-Token": "wrong"})
+        check(f"{path} wrong token -> 401", st == 401, f"got {st}")
+        st, _ = post(port, body, path, {**json_only, "X-DevFlow-Token": "t\u00e9st"})
+        check(f"{path} non-ASCII token -> 401", st == 401, f"got {st}")
+    check("disk unchanged", disk() == before)
+
+    print("7. a text/plain POST, the kind a web page can send with no preflight")
+    st, _ = post(port, good, "/api/state", {"Content-Type": "text/plain"})
+    check("refused 401", st == 401, f"got {st}")
+    check("disk unchanged", disk() == before)
+
+    print("8. no token configured: every write route fails closed")
+    configured = http_api._api_token
+    http_api._api_token = lambda: ""
+    for path, body in routes:
+        st, _ = post(port, body, path)
+        check(f"{path} -> 403", st == 403, f"got {st}")
+        st, _ = post(port, body, path, {**json_only, "X-DevFlow-Token": ""})
+        check(f"{path} empty token -> 403", st == 403, f"got {st}")
+    http_api._api_token = configured
+    check("disk unchanged", disk() == before)
+
+    print("9. the right token still writes")
+    seed_status()
+    st, _ = post(port, status_body, "/api/ticket/status")
+    check("status route accepted", st == 200, f"got {st}")
+    check("status written", disk()["tickets"][0]["status"] == "done")
+
+
+def seed_status():
+    def _seed(state):
+        state["tickets"] = [{**t, "status": "backlog", "log": []} for t in state["tickets"]]
+        return {}
+    mutate_state(_seed)
+
+
 def main():
+    http_api._api_token = lambda: TOKEN
     seed()
     srv = HTTPServer(("127.0.0.1", 0), http_api.DevFlowHandler)
     port = srv.server_address[1]
@@ -107,6 +165,8 @@ def main():
     st, _ = post(port, {"projects": [], "tickets": [], "next_id": "501"})
     check("rejected 409", st == 409, f"got {st}")
     check("disk untouched", len(disk()["tickets"]) == 6)
+
+    check_write_gate(port)
 
     srv.shutdown()
     print("\n" + ("ALL PASS" if not FAILURES else f"FAILURES: {FAILURES}"))
