@@ -14,7 +14,14 @@ from pathlib import Path
 
 # Concurrency-safe persistence (T-174): share the same locked, atomic store as
 # server.py so the dashboard and MCP servers can't clobber each other.
-from state_store import STATE_FILE, abort, mutate_state, next_ticket_id, read_state
+from state_store import (
+    STATE_FILE,
+    abort,
+    mutate_state,
+    next_ticket_id,
+    normalize_labels,
+    read_state,
+)
 
 _PRIORITIES = ("critical", "high", "medium", "low")
 _STATUSES = ("backlog", "active", "blocked", "done")
@@ -61,9 +68,12 @@ def create_ticket(body: dict) -> tuple[dict, int]:
     priority = body.get("priority") or "medium"
     status = body.get("status") or "backlog"
     desc = body.get("desc") or ""
+    labels = body.get("labels", [])
 
     if not title or not why or not project:
         return {"error": "title, why and project are required"}, 400
+    if not isinstance(labels, list) or not all(isinstance(x, str) for x in labels):
+        return {"error": "labels must be a list of strings"}, 400
     if priority not in _PRIORITIES:
         return {"error": f"Invalid priority '{priority}'"}, 400
     if status not in _STATUSES:
@@ -86,6 +96,7 @@ def create_ticket(body: dict) -> tuple[dict, int]:
             "blockedBy": [],
             "blocksTickets": [],
             "created": now_ms,
+            "labels": normalize_labels(labels),
             "log": [{"t": now_ms, "msg": "Ticket created (via HTTP API)"}],
         }
         state["tickets"].append(ticket)

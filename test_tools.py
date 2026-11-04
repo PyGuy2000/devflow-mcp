@@ -247,5 +247,54 @@ else:
 
     server._bridge = False
 
+# ── labels ────────────────────────────────────────────────────────────────
+
+print("labels:")
+write_state(base_state([make_ticket("T-001", "Old ticket, no labels key")]))
+
+r = server.add_ticket("Plain", "why", "test_project")
+check("labels default to an empty list", r["ticket"]["labels"] == [])
+
+r = server.add_ticket("Tagged", "why", "test_project", labels=[" Runner ", "runner", "", "UI"])
+tagged = r["ticket"]["id"]
+check("add_ticket trims, lowercases, drops blanks, dedupes", r["ticket"]["labels"] == ["runner", "ui"], str(r))
+
+r = server.list_tickets(label="RUNNER ")
+check("list_tickets filters by label, ignoring case and spaces",
+      [t["id"] for t in r["tickets"]] == [tagged], str(r))
+
+r = server.list_tickets(label="nope")
+check("an unknown label matches nothing, and a ticket with no labels key does not crash",
+      r["count"] == 0, str(r))
+
+r = server.list_tickets(label="   ")
+check("a blank label matches nothing", r["count"] == 0, str(r))
+
+r = server.edit_ticket("T-001", labels=["Runner"])
+check("edit_ticket sets labels on an old ticket", r["ticket"]["labels"] == ["runner"], str(r))
+check("the log names the new labels", "runner" in r["ticket"]["log"][-1]["msg"], str(r["ticket"]["log"][-1]))
+
+r = server.edit_ticket("T-001", title="Renamed")
+check("edit_ticket leaves labels alone when not passed", r["ticket"]["labels"] == ["runner"], str(r))
+
+r = server.edit_ticket("T-001", labels=[])
+check("edit_ticket clears labels with an empty list", r["ticket"]["labels"] == [], str(r))
+
+import http_api  # noqa: E402
+
+body, code = http_api.create_ticket(
+    {"title": "Via HTTP", "why": "why", "project": "test_project", "labels": ["Runner", " runner"]}
+)
+check("POST /api/ticket accepts labels", code == 201 and body["ticket"]["labels"] == ["runner"], str(body))
+
+body, code = http_api.create_ticket({"title": "No labels", "why": "why", "project": "test_project"})
+check("POST /api/ticket defaults labels to empty", code == 201 and body["ticket"]["labels"] == [], str(body))
+
+for bad in ("runner", ["runner", 3]):
+    body, code = http_api.create_ticket(
+        {"title": "Bad", "why": "why", "project": "test_project", "labels": bad}
+    )
+    check(f"POST /api/ticket refuses labels={bad!r}", code == 400 and "error" in body, str(body))
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

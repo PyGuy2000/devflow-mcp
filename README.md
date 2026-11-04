@@ -42,13 +42,13 @@ The web UI server (`http_api.py`) also refuses to double-launch: it doesn't set 
 
 ### Daily work (Tier 1)
 - `create_project` — register a project with a name, goal, and optional `repo_path`
-- `add_ticket` — create a ticket with title, rationale ("why"), priority, optional blockers, and an optional `verify_cmd`
+- `add_ticket` — create a ticket with title, rationale ("why"), priority, optional blockers, an optional `verify_cmd`, and optional `labels`
 - `update_ticket_status` — move tickets between backlog, active, blocked, done; a `done` transition reports any blocked tickets whose blockers are now all resolved, and is refused if the ticket's `verify_cmd` has not passed on the current revision
 - `verify_ticket` — run a ticket's `verify_cmd` and record the exit code, output tail, and git revision as proof on the ticket
-- `list_tickets` — query tickets with project/status/priority filters
+- `list_tickets` — query tickets with project/status/priority/label filters
 - `get_ticket` — full context for one ticket: fields, complete work log, dependencies resolved to titles/statuses
 - `log_work` — append a timestamped work note to a ticket's log (progress, findings, session-handoff breadcrumbs)
-- `edit_ticket` — modify ticket fields
+- `edit_ticket` — modify ticket fields, including `labels`
 - `delete_ticket` — remove a ticket and clean up dependency references
 
 ### Project queries (Tier 2)

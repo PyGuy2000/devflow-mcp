@@ -34,6 +34,7 @@ from state_store import (
     abort,
     mutate_state,
     next_ticket_id,
+    normalize_labels,
     read_state,
 )
 
@@ -227,6 +228,7 @@ def add_ticket(
     status: str = "backlog",
     desc: str = "",
     verify_cmd: str = "",
+    labels: Optional[list[str]] = None,
 ) -> dict:
     """
     Add a ticket to a project.
@@ -243,6 +245,9 @@ def add_ticket(
                     "pytest tests/test_foo.py -q". If set, the ticket cannot
                     move to 'done' until verify_ticket() runs it to exit 0 on
                     the current HEAD. Prefer a command the human chose.
+        labels: Free-form tags, stored trimmed and lowercase. A label is a
+                person's statement about the ticket, so set one only when the
+                human asked for it.
     """
     captured = {}
 
@@ -275,6 +280,7 @@ def add_ticket(
             "created": now_ms,
             "verifyCmd": verify_cmd,
             "verified": None,
+            "labels": normalize_labels(labels),
             "log": [{"t": now_ms, "msg": "Ticket created"}],
         }
 
@@ -411,6 +417,7 @@ def list_tickets(
     project: Optional[str] = None,
     status: Optional[str] = None,
     priority: Optional[str] = None,
+    label: Optional[str] = None,
 ) -> dict:
     """
     List tickets, optionally filtered.
@@ -419,6 +426,8 @@ def list_tickets(
         project: Filter by project name or ID.
         status: Filter by status (backlog, active, blocked, done).
         priority: Filter by priority (critical, high, medium, low).
+        label: Keep tickets carrying this label. Case and surrounding spaces
+               are ignored.
     """
     state = load_state()
     tickets = state["tickets"]
@@ -436,6 +445,10 @@ def list_tickets(
     if priority:
         tickets = [t for t in tickets if t["priority"] == priority]
 
+    if label is not None:
+        wanted = label.strip().lower()
+        tickets = [t for t in tickets if wanted and wanted in t.get("labels", [])]
+
     # Sort: critical > high > medium > low, then by created
     priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     tickets = sorted(tickets, key=lambda t: (priority_order.get(t["priority"], 9), t["created"]))
@@ -452,6 +465,7 @@ def edit_ticket(
     priority: Optional[str] = None,
     project: Optional[str] = None,
     verify_cmd: Optional[str] = None,
+    labels: Optional[list[str]] = None,
 ) -> dict:
     """
     Edit a ticket's fields. Only provided fields are updated.
@@ -466,6 +480,8 @@ def edit_ticket(
         verify_cmd: New verification command. Pass "" to remove the gate.
                     Changing it clears any stored proof — proof belongs to the
                     command that produced it.
+        labels: The full new label list; it replaces the old one. Pass [] to
+                clear. Set a label only when the human asked for it.
     """
     if priority and priority not in ("critical", "high", "medium", "low"):
         return {"error": f"Invalid priority '{priority}'."}
@@ -492,6 +508,8 @@ def edit_ticket(
         if verify_cmd is not None and verify_cmd != ticket.get("verifyCmd", ""):
             updates["verifyCmd"] = verify_cmd
             updates["verified"] = None
+        if labels is not None:
+            updates["labels"] = normalize_labels(labels)
 
         if project is not None:
             proj = _resolve_project(state, project)
@@ -501,7 +519,10 @@ def edit_ticket(
 
         now_ms = int(time.time() * 1000)
         changed_fields = ", ".join(updates.keys())
-        log_entry = {"t": now_ms, "msg": f"Edited: {changed_fields}"}
+        msg = f"Edited: {changed_fields}"
+        if "labels" in updates:
+            msg += f" (labels now: {', '.join(updates['labels']) or 'none'})"
+        log_entry = {"t": now_ms, "msg": msg}
 
         updated_ticket = {**ticket, **updates, "log": [*ticket["log"], log_entry]}
 

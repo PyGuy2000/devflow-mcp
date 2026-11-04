@@ -657,6 +657,18 @@
     color: var(--text-muted);
     border: 1px solid var(--border);
   }
+  .label-chip {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    font-family: inherit;
+    cursor: pointer;
+  }
   .dep-badge.blocked {
     background: var(--red-glow);
     border-color: var(--red);
@@ -1167,6 +1179,7 @@
         <button class="filter-btn active" onclick="setSort('priority',this)">Priority</button>
         <button class="filter-btn" onclick="setSort('project',this)">Project</button>
         <button class="filter-btn" onclick="setSort('age',this)">Age</button>
+        <button class="filter-btn active" id="label-filter" style="display:none" onclick="setLabelFilter('')"></button>
       </div>
     </div>
 
@@ -1645,6 +1658,8 @@ function renderSidebar() {
 // breadcrumbs). View-only: never touches saveState (see render() note above).
 // searchQuery is deliberately NOT on `state` so it can never ride a POST.
 let searchQuery = '';
+// Same rule for the label filter: view-only, never saved.
+let labelFilter = '';
 let _preSearchTitle = null;
 let _searchKbIndex = -1;
 
@@ -1652,8 +1667,17 @@ function escHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
 
+function setLabelFilter(label) {
+  labelFilter = labelFilter === label ? '' : label;
+  const btn = document.getElementById('label-filter');
+  btn.textContent = `label: ${labelFilter} ✕`;
+  btn.style.display = labelFilter ? '' : 'none';
+  renderBoard();
+}
+
 function ticketMatches(t, q) {
   if (t.id.toLowerCase().includes(q)) return true;
+  if ((t.labels || []).some(l => l.includes(q))) return true;
   if ((t.title || '').toLowerCase().includes(q)) return true;
   if ((t.why || '').toLowerCase().includes(q)) return true;
   if ((t.desc || '').toLowerCase().includes(q)) return true;
@@ -1776,6 +1800,10 @@ function getFilteredTickets() {
     tickets = tickets.filter(t => t.blockedBy.length > 0 || t.blocksTickets.length > 0);
   }
 
+  if (labelFilter) {
+    tickets = tickets.filter(t => (t.labels || []).includes(labelFilter));
+  }
+
   if (state.sortMode === 'priority') tickets.sort((a,b) => priOrder(a.priority) - priOrder(b.priority));
   else if (state.sortMode === 'project') tickets.sort((a,b) => (a.projectId||'').localeCompare(b.projectId||''));
   else if (state.sortMode === 'age') tickets.sort((a,b) => a.created - b.created);
@@ -1823,9 +1851,16 @@ function buildTicketCard(t) {
     ${proj ? `<span class="ticket-project-tag" style="background:${proj.color}22;color:${proj.color};border:1px solid ${proj.color}44"><span style="width:5px;height:5px;border-radius:50%;background:${proj.color};display:inline-block"></span>${proj.name}</span>` : ''}
     <div class="ticket-footer">
       ${depBadges}
+      ${(t.labels || []).map(l => `<button type="button" class="label-chip" data-label="${escHtml(l)}" title="Show only this label">${escHtml(l)}</button>`).join('')}
       <span class="ticket-age">${timeAgo(t.created)}</span>
     </div>
   `;
+  div.querySelectorAll('.label-chip').forEach(chip => {
+    chip.addEventListener('click', e => {
+      e.stopPropagation(); // the card's own click opens the detail panel
+      setLabelFilter(chip.dataset.label);
+    });
+  });
   return div;
 }
 
@@ -2647,6 +2682,7 @@ function createTicket() {
     status,
     blockedBy,
     blocksTickets: [],
+    labels: [],
     created: Date.now(),
     log: [{ t: Date.now(), msg: `Ticket created` }]
   };

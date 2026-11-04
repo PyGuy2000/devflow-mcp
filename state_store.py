@@ -224,6 +224,12 @@ def mutate_state(mutator):
 # ── ID allocation (must be called inside a mutator, on freshly-read state) ───────
 
 
+def normalize_labels(labels: list[str] | None) -> list[str]:
+    """Trim and lowercase labels, drop blanks and duplicates, keep first-seen order."""
+    cleaned = (label.strip().lower() for label in labels or [])
+    return list(dict.fromkeys(label for label in cleaned if label))
+
+
 def next_ticket_id(state: dict) -> str:
     tid = f"T-{state['next_id']:03d}"
     state["next_id"] = state["next_id"] + 1
