@@ -2031,6 +2031,7 @@ function filterProject(id, el) {
   el.classList.add('active');
   const proj = getProject(id);
   document.getElementById('board-title').textContent = proj ? proj.name : 'All Tickets';
+  applyViewMode();
   render();
 }
 
@@ -2439,11 +2440,11 @@ function buildThemeRow(r) {
   const color = THEME_VERDICT_COLOR[r.verdict] || 'var(--text-muted)';
   const flags = r.flags.map(f => `<span class="theme-flag ${f}">${THEME_FLAG_LABEL[f] || f}</span>`).join('');
   return `<div class="theme-row ${selectedTheme === r.id ? 'selected' : ''}" style="border-left-color:${color}"
-               onclick="selectTheme('${r.id}')">
-    <span class="theme-id">${r.id}</span>
+               onclick="selectTheme('${escapeHtml(r.id)}')">
+    <span class="theme-id">${escapeHtml(r.id)}</span>
     <span class="theme-title">${escapeHtml(r.title)}</span>
     <span class="dep-status-chip" style="background:${color}22;color:${color};border:1px solid ${color}44">
-      ${r.kind === 'theme' ? r.verdict : r.kind}</span>
+      ${escapeHtml(r.kind === 'theme' ? r.verdict : r.kind)}</span>
     <div class="theme-meta">
       <span title="ADRs that name this theme first / in total">ADRs ${r.adrs_primary}/${r.adrs_total}</span>
       <span title="Open / total tickets">tickets ${r.tickets_open}/${r.tickets_total}</span>
@@ -2517,8 +2518,8 @@ function renderThemeDetail(id) {
 
   content.innerHTML = `
     <div class="panel-header">
-      <span class="panel-ticket-id">${r.id} · ${r.kind}</span>
-      <span class="dep-status-chip" style="background:${color}22;color:${color};border:1px solid ${color}44">${r.verdict}</span>
+      <span class="panel-ticket-id">${escapeHtml(r.id)} · ${escapeHtml(r.kind)}</span>
+      <span class="dep-status-chip" style="background:${color}22;color:${color};border:1px solid ${color}44">${escapeHtml(r.verdict)}</span>
     </div>
     <div style="padding:14px 16px;overflow-y:auto;flex:1">
       <div style="font-size:14px;line-height:1.45;margin-bottom:8px">${escapeHtml(r.title)}</div>
@@ -2529,7 +2530,7 @@ function renderThemeDetail(id) {
 
       <div class="adr-sec-title">Verdict</div>
       <div style="font-size:11px;color:var(--text-dim);line-height:1.5">
-        ${r.verdict}${r.verdict_date ? ` · ${r.verdict_date}` : ' · no verdict recorded yet'}
+        ${escapeHtml(r.verdict)}${r.verdict_date ? ` · ${r.verdict_date}` : ' · no verdict recorded yet'}
         ${r.verdict_note ? `<br>${escapeHtml(r.verdict_note)}` : ''}
       </div>
 
