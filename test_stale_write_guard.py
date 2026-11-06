@@ -18,6 +18,8 @@ Run: python3 test_stale_write_guard.py
 
 import json
 import os
+import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -131,6 +133,36 @@ def seed_status():
     mutate_state(_seed)
 
 
+def check_second_server_leaves_state_alone():
+    """A second http_api.py on a taken port exits and never creates the state file.
+
+    On 2026-08-20 a duplicate server's startup wrote a fresh state over 615
+    tickets before it died on the taken port. main() must bind before any state
+    access; this holds it there.
+    """
+    print("10. second http_api.py on a taken port: exits non-zero, no state file")
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        holder.bind(("127.0.0.1", 7117))
+        holder.listen(1)
+    except OSError:
+        pass  # already taken by something else, which is just as good
+    try:
+        state_file = os.path.join(tempfile.mkdtemp(), "devflow_state.json")
+        env = {**os.environ, "DEVFLOW_STATE_FILE": state_file}
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "http_api.py")
+        try:
+            proc = subprocess.run([sys.executable, script], env=env,
+                                  capture_output=True, text=True, timeout=20)
+            code, extra = proc.returncode, proc.stderr.strip()[-120:]
+        except subprocess.TimeoutExpired:
+            code, extra = None, "timed out after 20s"
+        check("exits non-zero", code not in (None, 0), f"exit {code}; {extra}")
+        check("state file still does not exist", not os.path.exists(state_file))
+    finally:
+        holder.close()
+
+
 def main():
     http_api._api_token = lambda: TOKEN
     seed()
@@ -167,6 +199,7 @@ def main():
     check("disk untouched", len(disk()["tickets"]) == 6)
 
     check_write_gate(port)
+    check_second_server_leaves_state_alone()
 
     srv.shutdown()
     print("\n" + ("ALL PASS" if not FAILURES else f"FAILURES: {FAILURES}"))
